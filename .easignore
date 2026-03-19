@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+.git/
+dist/
+build/
+*.log
+.DS_Store
+tmp-*.json
+tmp-*.txt
+Internly web/
+**/.DS_Store
+**/node_modules/
+**/.expo/
+**/build/

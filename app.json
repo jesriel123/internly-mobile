@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Internly OJT Tracker",
+    "slug": "internly-ojt-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.internly.ojttracker"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "d329cb68-6a5f-4e21-8055-6ae62b0ea942"
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Internly to access your photos to set a profile picture."
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#7B68EE"
+        }
+      ],
+      "expo-asset"
+    ]
+  }
+}
