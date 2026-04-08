@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useCallback, useEffect } from 'react';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Provider as PaperProvider } from 'react-native-paper';
@@ -14,10 +14,12 @@ import LoginScreen from './src/screens/LoginScreen';
 import AdminScreen from './src/screens/AdminScreen';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
-import { setupNotificationListeners } from './src/utils/notificationService';
+import { ensureNotificationPermission, setupNotificationListeners } from './src/utils/notificationService';
+import { startRealtimeNotificationBridge } from './src/utils/realtimeNotificationBridge';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
+const navigationRef = createNavigationContainerRef();
 
 function LoadingScreen() {
   return (
@@ -80,21 +82,73 @@ function AuthStack() {
 function AppNavigator() {
   const { user, loading } = useAuth();
 
+  const handleNotificationTap = useCallback(
+    (response) => {
+      if (!user || !navigationRef.isReady()) {
+        return;
+      }
+
+      const payload = response?.notification?.request?.content?.data || {};
+      const targetScreen = String(payload.screen || payload.routeName || '').trim();
+      const params = payload.params && typeof payload.params === 'object' ? payload.params : undefined;
+
+      if (!targetScreen) {
+        navigationRef.navigate('History');
+        return;
+      }
+
+      if (targetScreen === 'Admin' && !['admin', 'super_admin'].includes(user.role)) {
+        return;
+      }
+
+      const allowedScreens = ['Dashboard', 'TimeLog', 'History', 'Profile', 'Admin'];
+      if (allowedScreens.includes(targetScreen)) {
+        navigationRef.navigate(targetScreen, params);
+      }
+    },
+    [user]
+  );
+
   useEffect(() => {
-    const { unsubscribeForeground, unsubscribeBackground } = setupNotificationListeners();
+    const { unsubscribeForeground, unsubscribeBackground } = setupNotificationListeners(handleNotificationTap);
     
     return () => {
       unsubscribeForeground();
       unsubscribeBackground();
     };
-  }, []);
+  }, [handleNotificationTap]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      return undefined;
+    }
+
+    let unsubscribeRealtime = () => {};
+    let disposed = false;
+
+    const initRealtimeBridge = async () => {
+      const hasPermission = await ensureNotificationPermission();
+      if (!hasPermission || disposed) {
+        return;
+      }
+
+      unsubscribeRealtime = startRealtimeNotificationBridge(user.uid);
+    };
+
+    initRealtimeBridge();
+
+    return () => {
+      disposed = true;
+      unsubscribeRealtime();
+    };
+  }, [user?.uid]);
 
   if (loading) {
     return <LoadingScreen />;
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {user ? <MainTabs /> : <AuthStack />}
     </NavigationContainer>
   );

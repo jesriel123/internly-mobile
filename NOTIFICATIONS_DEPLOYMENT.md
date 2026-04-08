@@ -34,6 +34,8 @@ Then execute (should complete in ~5 seconds).
 
 ## Step 2: Configure Expo (Mobile Setup)
 
+Important: Even if your backend is Supabase, Expo push notifications on Android still require Firebase Cloud Messaging (FCM) client setup.
+
 ### 2.1 Ensure Expo Account & Project ID
 
 ```bash
@@ -55,7 +57,35 @@ If missing, run:
 eas project:create
 ```
 
-### 2.2 Install Dependencies & Build
+### 2.2 Configure Android FCM Client (Required)
+
+1. Open Firebase Console and create/select a Firebase project.
+2. Add an Android app with package name:
+
+```text
+com.internly.ojttracker
+```
+
+3. Download `google-services.json`.
+4. Place `google-services.json` in the mobile project root (same level as `app.json`).
+5. Add this field in `app.json` under `expo.android`:
+
+```json
+"android": {
+   "package": "com.internly.ojttracker",
+   "googleServicesFile": "./google-services.json"
+}
+```
+
+6. Rebuild your development client (required after native config changes):
+
+```bash
+npx eas build --platform android --profile development
+```
+
+Without this file and rebuild, Android push token registration fails with: `Default FirebaseApp is not initialized`.
+
+### 2.3 Install Dependencies & Build
 
 ```bash
 npm install

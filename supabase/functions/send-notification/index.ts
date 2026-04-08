@@ -1,162 +1,219 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
 
 const EXPO_PUSH_API = 'https://exp.host/--/api/v2/push/send';
+const TOKEN_TABLE = 'device_tokens';
 
 interface PushMessage {
   to: string;
-  sound: string;
+  sound: 'default';
   title: string;
   body: string;
-  data: Record<string, string>;
+  data: Record<string, unknown>;
 }
 
+interface DispatchResult {
+  sentCount: number;
+  failedCount: number;
+  errors: Record<string, string>;
+}
+
+const json = (payload: Record<string, unknown>, status = 200) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const normalizeExpoTickets = (responsePayload: unknown): Array<{ status: string; message?: string }> => {
+  if (Array.isArray(responsePayload)) {
+    return responsePayload as Array<{ status: string; message?: string }>;
+  }
+
+  if (
+    responsePayload &&
+    typeof responsePayload === 'object' &&
+    Array.isArray((responsePayload as { data?: unknown }).data)
+  ) {
+    return (responsePayload as { data: Array<{ status: string; message?: string }> }).data;
+  }
+
+  return [];
+};
+
+const dispatchMessages = async (messages: PushMessage[]): Promise<DispatchResult> => {
+  let sentCount = 0;
+  let failedCount = 0;
+  const errors: Record<string, string> = {};
+
+  const batchSize = 100;
+  for (let i = 0; i < messages.length; i += batchSize) {
+    const batch = messages.slice(i, i + batchSize);
+
+    try {
+      const pushResponse = await fetch(EXPO_PUSH_API, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(batch),
+      });
+
+      const pushData = await pushResponse.json();
+      const tickets = normalizeExpoTickets(pushData);
+
+      if (tickets.length === 0) {
+        failedCount += batch.length;
+        batch.forEach((message) => {
+          errors[message.to] = 'Invalid response from Expo Push API';
+        });
+        continue;
+      }
+
+      tickets.forEach((ticket, idx) => {
+        if (ticket.status === 'ok') {
+          sentCount += 1;
+          return;
+        }
+
+        failedCount += 1;
+        const token = batch[idx]?.to;
+        if (token) {
+          errors[token] = ticket.message || 'Unknown Expo error';
+        }
+      });
+    } catch (error) {
+      console.error('[send-notification] Failed to dispatch message batch:', error);
+      failedCount += batch.length;
+      batch.forEach((message) => {
+        errors[message.to] = 'Network or server error while contacting Expo';
+      });
+    }
+  }
+
+  return { sentCount, failedCount, errors };
+};
+
+const mapTokensToMessages = (
+  tokens: Array<{ token: string }>,
+  title: string,
+  body: string,
+  data: Record<string, unknown>
+): PushMessage[] =>
+  tokens
+    .map((row) => row.token)
+    .filter(Boolean)
+    .map((token) => ({
+      to: token,
+      sound: 'default',
+      title,
+      body,
+      data,
+    }));
+
 Deno.serve(async (req) => {
+  if (req.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, 405);
+  }
+
   try {
-    // Only accept POST
-    if (req.method !== 'POST') {
-      return new Response('Method not allowed', { status: 405 });
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return json({ error: 'Request body must be valid JSON.' }, 400);
     }
 
-    const { notification_id } = await req.json();
+    const notificationId =
+      typeof (body as { notification_id?: unknown }).notification_id === 'string'
+        ? (body as { notification_id: string }).notification_id
+        : null;
 
-    if (!notification_id) {
-      return new Response(
-        JSON.stringify({ error: 'notification_id is required' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    const userId =
+      typeof (body as { user_id?: unknown }).user_id === 'string'
+        ? (body as { user_id: string }).user_id
+        : null;
 
-    // Initialize Supabase client with service role
+    const directTitle =
+      typeof (body as { title?: unknown }).title === 'string'
+        ? (body as { title: string }).title.trim()
+        : '';
+
+    const directBody =
+      typeof (body as { body?: unknown }).body === 'string'
+        ? (body as { body: string }).body.trim()
+        : '';
+
+    const directData =
+      (body as { data?: unknown }).data && typeof (body as { data?: unknown }).data === 'object'
+        ? (body as { data: Record<string, unknown> }).data
+        : {};
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
     if (!supabaseUrl || !serviceRoleKey) {
-      return new Response(
-        JSON.stringify({ error: 'Missing Supabase config' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
+      return json({ error: 'Missing Supabase environment variables.' }, 500);
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    // Get notification details
-    const { data: notification, error: notifError } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('id', notification_id)
-      .single();
+    if (notificationId) {
+      const { data: notification, error: notificationError } = await supabase
+        .from('notifications')
+        .select('id, title, message')
+        .eq('id', notificationId)
+        .single();
 
-    if (notifError || !notification) {
-      console.error('[send-notification] Notification not found:', notifError);
-      return new Response(
-        JSON.stringify({ error: 'Notification not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Get notification logs for this notification
-    const { data: logs, error: logsError } = await supabase
-      .from('notification_logs')
-      .select('recipient_id')
-      .eq('notification_id', notification_id);
-
-    if (logsError) {
-      console.error('[send-notification] Failed to fetch logs:', logsError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to fetch logs' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const recipientIds = logs?.map(log => log.recipient_id) || [];
-    console.log(`[send-notification] Found ${recipientIds.length} recipients`);
-
-    if (recipientIds.length === 0) {
-      return new Response(
-        JSON.stringify({ success: true, sent: 0, failed: 0 }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Get device tokens for recipients
-    const { data: tokens, error: tokensError } = await supabase
-      .from('device_tokens')
-      .select('token, user_id')
-      .in('user_id', recipientIds)
-      .eq('is_active', true);
-
-    if (tokensError) {
-      console.error('[send-notification] Failed to fetch tokens:', tokensError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to fetch tokens' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const deviceTokens = tokens || [];
-    console.log(`[send-notification] Found ${deviceTokens.length} active devices`);
-
-    // Send push notifications via Expo
-    const messages: PushMessage[] = deviceTokens.map(({ token }) => ({
-      to: token,
-      sound: 'default',
-      title: notification.title,
-      body: notification.message,
-      data: {
-        notificationId: notification_id,
-        type: 'notification',
-      },
-    }));
-
-    let sentCount = 0;
-    let failedCount = 0;
-    const errors: Record<string, string> = {};
-
-    // Send in batches
-    const batchSize = 100;
-    for (let i = 0; i < messages.length; i += batchSize) {
-      const batch = messages.slice(i, i + batchSize);
-
-      try {
-        const pushResponse = await fetch(EXPO_PUSH_API, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip, deflate',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(batch),
-        });
-
-        const pushData = await pushResponse.json();
-
-        if (Array.isArray(pushData)) {
-          pushData.forEach((result: any, idx: number) => {
-            if (result.status === 'ok') {
-              sentCount++;
-            } else {
-              failedCount++;
-              const token = batch[idx]?.to;
-              errors[token] = result.message || 'Unknown error';
-            }
-          });
-        }
-      } catch (err) {
-        console.error('[send-notification] Batch send failed:', err);
-        failedCount += batch.length;
+      if (notificationError || !notification) {
+        console.error('[send-notification] Notification not found:', notificationError);
+        return json({ error: 'Notification not found.' }, 404);
       }
-    }
 
-    console.log(
-      `[send-notification] Sent: ${sentCount}, Failed: ${failedCount}`
-    );
+      const { data: logs, error: logsError } = await supabase
+        .from('notification_logs')
+        .select('recipient_id')
+        .eq('notification_id', notificationId);
 
-    // Update notification logs with delivery status
-    const failedTokens = Object.keys(errors);
-    if (failedTokens.length > 0) {
-      const failedUserIds = deviceTokens
-        .filter(dt => failedTokens.includes(dt.token))
-        .map(dt => dt.user_id);
+      if (logsError) {
+        console.error('[send-notification] Failed to fetch recipients:', logsError);
+        return json({ error: 'Failed to fetch recipients.' }, 500);
+      }
+
+      const recipientIds = (logs || []).map((row) => row.recipient_id).filter(Boolean);
+      if (recipientIds.length === 0) {
+        return json({ success: true, mode: 'notification_id', sent: 0, failed: 0 }, 200);
+      }
+
+      const { data: tokenRows, error: tokensError } = await supabase
+        .from(TOKEN_TABLE)
+        .select('token, user_id')
+        .in('user_id', recipientIds)
+        .eq('is_active', true);
+
+      if (tokensError) {
+        console.error('[send-notification] Failed to fetch device tokens:', tokensError);
+        return json({ error: 'Failed to fetch device tokens.' }, 500);
+      }
+
+      const tokens = tokenRows || [];
+      const messages = mapTokensToMessages(tokens, notification.title, notification.message, {
+        notificationId,
+        type: 'notification',
+      });
+
+      if (messages.length === 0) {
+        return json({ success: true, mode: 'notification_id', sent: 0, failed: 0 }, 200);
+      }
+
+      const { sentCount, failedCount, errors } = await dispatchMessages(messages);
+
+      const failedTokens = Object.keys(errors);
+      const failedUserIds = tokens
+        .filter((row) => failedTokens.includes(row.token))
+        .map((row) => row.user_id);
+
+      const successUserIds = tokens
+        .filter((row) => !failedTokens.includes(row.token))
+        .map((row) => row.user_id);
 
       if (failedUserIds.length > 0) {
         await supabase
@@ -166,37 +223,75 @@ Deno.serve(async (req) => {
             error_message: 'Device token invalid or expired',
           })
           .in('recipient_id', failedUserIds)
-          .eq('notification_id', notification_id);
+          .eq('notification_id', notificationId);
       }
+
+      if (successUserIds.length > 0) {
+        await supabase
+          .from('notification_logs')
+          .update({ status: 'delivered' })
+          .in('recipient_id', successUserIds)
+          .eq('notification_id', notificationId);
+      }
+
+      return json(
+        {
+          success: true,
+          mode: 'notification_id',
+          sent: sentCount,
+          failed: failedCount,
+          errors: failedCount > 0 ? errors : undefined,
+        },
+        200
+      );
     }
 
-    // Mark successful deliveries
-    const successUserIds = deviceTokens
-      .filter(dt => !failedTokens.includes(dt.token))
-      .map(dt => dt.user_id);
+    if (userId && directTitle && directBody) {
+      const { data: tokenRows, error: tokensError } = await supabase
+        .from(TOKEN_TABLE)
+        .select('token, user_id')
+        .eq('user_id', userId)
+        .eq('is_active', true);
 
-    if (successUserIds.length > 0) {
-      await supabase
-        .from('notification_logs')
-        .update({ status: 'delivered' })
-        .in('recipient_id', successUserIds)
-        .eq('notification_id', notification_id);
+      if (tokensError) {
+        console.error('[send-notification] Failed to fetch direct target tokens:', tokensError);
+        return json({ error: 'Failed to fetch device tokens.' }, 500);
+      }
+
+      const tokens = tokenRows || [];
+      const messages = mapTokensToMessages(tokens, directTitle, directBody, {
+        ...directData,
+        userId,
+        type: 'direct',
+      });
+
+      if (messages.length === 0) {
+        return json({ success: true, mode: 'direct', sent: 0, failed: 0 }, 200);
+      }
+
+      const { sentCount, failedCount, errors } = await dispatchMessages(messages);
+
+      return json(
+        {
+          success: true,
+          mode: 'direct',
+          sent: sentCount,
+          failed: failedCount,
+          errors: failedCount > 0 ? errors : undefined,
+        },
+        200
+      );
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        sent: sentCount,
-        failed: failedCount,
-        errors: failedCount > 0 ? errors : undefined,
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    return json(
+      {
+        error:
+          'Invalid payload. Send either { notification_id } or { user_id, title, body, data? }.',
+      },
+      400
     );
   } catch (error) {
     console.error('[send-notification] Unexpected error:', error);
-    return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return json({ error: 'Internal server error.' }, 500);
   }
 });

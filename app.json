@@ -26,7 +26,8 @@
     "extra": {
       "eas": {
         "projectId": "d329cb68-6a5f-4e21-8055-6ae62b0ea942"
-      }
+      },
+      "enableRemotePush": false
     },
     "plugins": [
       "expo-dev-client",

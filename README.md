@@ -28,8 +28,34 @@ npm install
 
 3. Run the app:
 ```bash
-npm start
+npm run start:hot
 ```
+
+## Flutter-style Hot Reload (React Native)
+
+React Native uses Fast Refresh. Every time you save a file, the app updates automatically (similar to Flutter hot reload).
+
+- Use `npm run start:hot` for stable file watching on Windows/OneDrive.
+- If your phone is not on the same network, use `npm run start:hot:tunnel`.
+- If you are using a custom dev client, use `npm run start:hot:dev`.
+- Press `r` in the Metro terminal for manual reload.
+- Make sure `Fast Refresh` is enabled in the dev menu (shake device or press `Ctrl + M` on Android emulator).
+
+## View App Inside VS Code (Laptop Screen)
+
+If you want to see your app directly inside VS Code while editing:
+
+1. Run:
+```bash
+npm run web:vscode
+```
+
+2. Open VS Code integrated browser to:
+```text
+http://localhost:8082
+```
+
+3. Keep the terminal running, then edit and save files. The preview updates with Fast Refresh.
 
 ## Structure
 

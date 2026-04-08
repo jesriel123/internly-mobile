@@ -45,6 +45,24 @@ function classifyLog(hours, dailyMax) {
   return 'halfDay';
 }
 
+function getHeroGradient(hour, isDark) {
+  if (isDark) {
+    if (hour < 12) return ['#1E3A8A', '#312E81', '#4C1D95'];
+    if (hour < 17) return ['#1D4ED8', '#4338CA', '#6D28D9'];
+    return ['#0F172A', '#1E1B4B', '#312E81'];
+  }
+  if (hour < 12) return ['#2563EB', '#4F46E5', '#7C3AED'];
+  if (hour < 17) return ['#0EA5E9', '#2563EB', '#4F46E5'];
+  return ['#1D4ED8', '#4338CA', '#7C3AED'];
+}
+
+function getHeroStatus(progress, remainingHours, pendingHours) {
+  if (progress >= 100) return 'Target completed. Keep logging for your records.';
+  if (pendingHours > 0) return `${pendingHours.toFixed(1)}h pending approval.`;
+  if (remainingHours <= 40) return 'Final stretch. You are almost done.';
+  return 'Keep your momentum strong this week.';
+}
+
 function computeAttendance(logs, startDate, dailyMax) {
   const logMap = {};
   logs.forEach(l => { logMap[l.date] = l; });
@@ -180,6 +198,9 @@ export default function DashboardScreen() {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const firstName = (user?.name || 'Intern').split(' ')[0];
   const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const heroGradient = getHeroGradient(hour, isDark);
+  const heroStatus = getHeroStatus(progress, remaining, ojtData.pendingHours);
+  const userInitial = firstName ? firstName.charAt(0).toUpperCase() : 'I';
 
   const { present, absent, halfDay, earlyOut, overtime } = ojtData.attendance;
   const totalDays = present + absent + halfDay + earlyOut + overtime;
@@ -194,17 +215,71 @@ export default function DashboardScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 16 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.primary]} />}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={[styles.greeting, { color: theme.textSecondary }]}>{greeting} 👋</Text>
-          <Text style={[styles.name, { color: theme.text }]}>{firstName}</Text>
-          <Text style={[styles.date, { color: theme.textSecondary }]}>{todayStr}</Text>
-        </View>
+        {/* Hero Header */}
+        <LinearGradient
+          colors={heroGradient}
+          style={[styles.heroCard, { shadowColor: isDark ? '#000' : '#4338CA' }]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        >
+          <View style={styles.heroOrbPrimary} />
+          <View style={styles.heroOrbSecondary} />
+
+          <View style={styles.heroTopRow}>
+            <View style={styles.heroBadge}>
+              <MaterialCommunityIcons name="sparkles" size={13} color="#EEF2FF" />
+              <Text style={styles.heroBadgeText}>Internly Dashboard</Text>
+            </View>
+            <Text style={styles.heroPercentText}>{progress.toFixed(0)}%</Text>
+          </View>
+
+          <View style={styles.heroIdentityRow}>
+            <View style={styles.heroAvatar}>
+              <Text style={styles.heroAvatarText}>{userInitial}</Text>
+            </View>
+            <View style={styles.heroIdentityText}>
+              <Text style={styles.heroGreeting}>{greeting} 👋</Text>
+              <Text style={styles.heroName}>{firstName}</Text>
+              <View style={styles.heroDateRow}>
+                <MaterialCommunityIcons name="calendar-blank-outline" size={13} color="rgba(255,255,255,0.85)" />
+                <Text style={styles.heroDate}>{todayStr}</Text>
+              </View>
+            </View>
+          </View>
+
+          <Text style={styles.heroSubline}>{heroStatus}</Text>
+
+          <View style={styles.heroStatsRow}>
+            <View style={styles.heroStatPill}>
+              <Text style={styles.heroStatValue}>{rendered.toFixed(1)}h</Text>
+              <Text style={styles.heroStatLabel}>Rendered</Text>
+            </View>
+            <View style={styles.heroStatPill}>
+              <Text style={styles.heroStatValue}>{ojtData.pendingHours.toFixed(1)}h</Text>
+              <Text style={styles.heroStatLabel}>Pending</Text>
+            </View>
+            <View style={styles.heroStatPill}>
+              <Text style={styles.heroStatValue}>{remaining.toFixed(1)}h</Text>
+              <Text style={styles.heroStatLabel}>Left</Text>
+            </View>
+          </View>
+
+          <View style={styles.heroActionsRow}>
+            <TouchableOpacity style={styles.heroActionButton} onPress={() => navigation.navigate('TimeLog')}>
+              <MaterialCommunityIcons name="clock-plus-outline" size={14} color="#FFFFFF" />
+              <Text style={styles.heroActionText}>Log Time</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.heroActionButtonGhost} onPress={() => navigation.navigate('History')}>
+              <MaterialCommunityIcons name="history" size={14} color="#FFFFFF" />
+              <Text style={styles.heroActionText}>View History</Text>
+            </TouchableOpacity>
+          </View>
+        </LinearGradient>
 
         {/* Top Row: Main Stats + Attendance Summary */}
         <View style={styles.topRow}>
           {/* Main Stats Card */}
-          <View style={[styles.topCard, { backgroundColor: theme.surface }]}>
+          <View style={[styles.topCard, { backgroundColor: theme.surface, borderColor: isDark ? '#2B2B31' : '#ECEBFF' }]}> 
             <View style={styles.circleProgressContainerSm}>
               <View style={[styles.circleRingSm, { borderTopColor: COLORS.primary, borderRightColor: COLORS.primary, borderBottomColor: theme.accent, borderLeftColor: theme.accent }]} />
               <View style={[styles.circleInnerSm, { backgroundColor: theme.surface }]}>
@@ -229,7 +304,7 @@ export default function DashboardScreen() {
           </View>
 
           {/* Attendance Summary Bar Chart */}
-          <View style={[styles.topCard, { backgroundColor: theme.surface }]}>
+          <View style={[styles.topCard, { backgroundColor: theme.surface, borderColor: isDark ? '#2B2B31' : '#ECEBFF' }]}> 
             <Text style={[styles.attendanceSummaryTitle, { color: theme.text }]}>Attendance{'\n'}Summary</Text>
             <View style={styles.barChart}>
               {[
@@ -267,7 +342,7 @@ export default function DashboardScreen() {
         </LinearGradient>
 
         {/* Overall Progress Bar */}
-        <View style={styles.progressSection}>
+        <View style={[styles.progressSection, { backgroundColor: theme.surface, borderColor: isDark ? '#2B2B31' : '#EEF0F5' }]}>
           <View style={styles.progressRow}>
             <Text style={[styles.progressLabel, { color: theme.textSecondary }]}>Overall Progress</Text>
             <Text style={styles.progressValue}>{progress.toFixed(1)}%</Text>
@@ -298,7 +373,7 @@ export default function DashboardScreen() {
               const typeConfig = LOG_TYPE_CONFIG[logType] || LOG_TYPE_CONFIG.present;
 
               return (
-                <View key={log.id} style={[styles.logCard, { backgroundColor: theme.surface }]}>
+                <View key={log.id} style={[styles.logCard, { backgroundColor: theme.surface, borderColor: isDark ? '#2B2B31' : '#EEF0F5' }]}> 
                   <View style={styles.logLeft}>
                     <View style={styles.logDateRow}>
                       <Text style={[styles.logDate, { color: theme.text }]}>{formatDate(log.date)}</Text>
@@ -340,15 +415,176 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   scrollContent: { padding: SPACING.lg },
 
-  header: { marginBottom: SPACING.xl },
-  greeting: { fontSize: 16, marginBottom: 2 },
-  name: { fontSize: 28, fontWeight: 'bold', marginBottom: 2 },
-  date: { fontSize: 13 },
+  heroCard: {
+    borderRadius: 28,
+    padding: SPACING.lg,
+    marginBottom: SPACING.lg,
+    overflow: 'hidden',
+    elevation: 6,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+  },
+  heroOrbPrimary: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    right: -70,
+    top: -70,
+  },
+  heroOrbSecondary: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    left: -45,
+    bottom: -45,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  heroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    letterSpacing: 0.2,
+    fontWeight: '600',
+  },
+  heroPercentText: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  heroIdentityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  heroAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  heroAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  heroIdentityText: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  heroGreeting: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 14,
+  },
+  heroName: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    lineHeight: 36,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    marginBottom: 3,
+  },
+  heroDateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  heroDate: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    flexShrink: 1,
+  },
+  heroSubline: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  heroStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 12,
+  },
+  heroStatPill: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 14,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  heroStatValue: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  heroStatLabel: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  heroActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  heroActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  heroActionButtonGhost: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  heroActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 
   topRow: { flexDirection: 'row', gap: 10, marginBottom: SPACING.lg },
   topCard: {
-    flex: 1, borderRadius: BORDER_RADIUS.lg, padding: SPACING.md,
-    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6,
+    flex: 1, borderRadius: 22, padding: SPACING.md, borderWidth: 1,
+    elevation: 4, shadowColor: '#111827', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.08, shadowRadius: 10,
     alignItems: 'center',
   },
   circleProgressContainerSm: { width: 80, height: 80, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
@@ -381,7 +617,12 @@ const styles = StyleSheet.create({
   ecdDate: { color: '#fff', fontSize: 26, fontWeight: 'bold' },
   ecdIcon: { position: 'absolute', right: -15, bottom: -15, transform: [{ rotate: '15deg' }] },
 
-  progressSection: { marginBottom: SPACING.lg },
+  progressSection: {
+    marginBottom: SPACING.lg,
+    padding: SPACING.md,
+    borderRadius: BORDER_RADIUS.md,
+    borderWidth: 1,
+  },
   progressRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   progressLabel: { fontSize: 13, fontWeight: '600' },
   progressValue: { fontSize: 13, color: COLORS.primary, fontWeight: 'bold' },
@@ -394,9 +635,9 @@ const styles = StyleSheet.create({
 
   logsList: { gap: 12 },
   logCard: {
-    borderRadius: BORDER_RADIUS.md, padding: SPACING.md,
+    borderRadius: BORDER_RADIUS.md, padding: SPACING.md, borderWidth: 1,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3,
+    elevation: 2, shadowColor: '#111827', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 6,
   },
   logLeft: { flex: 1, marginRight: 8 },
   logDateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' },
