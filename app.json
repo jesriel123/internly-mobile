@@ -2,7 +2,8 @@
   "expo": {
     "name": "Internly OJT Tracker",
     "slug": "internly-ojt-tracker",
-    "version": "1.0.0",
+    "scheme": "internly",
+    "version": "1.0.3",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
@@ -18,7 +19,22 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.internly.ojttracker"
+      "package": "com.internly.ojttracker",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "internly"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "bundler": "metro"

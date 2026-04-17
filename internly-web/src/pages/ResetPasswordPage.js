@@ -26,23 +26,17 @@ function extractRecoveryPayload(url) {
     refreshToken: merged.get('refresh_token'),
     authCode: merged.get('code'),
     tokenHash: merged.get('token_hash'),
+    token: merged.get('token'),
+    type: merged.get('type') || 'recovery',
     email: merged.get('email'),
-    errorCode: merged.get('error'),
+    error: merged.get('error'),
     errorDescription: merged.get('error_description'),
-    type: merged.get('type'),
   };
 }
 
 async function bindRecoverySession(payload) {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Invalid reset link. Please request a new one.');
-  }
-
-  if (payload.errorCode) {
-    throw new Error(decodeURIComponent(payload.errorDescription || payload.errorCode));
-  }
-  if (payload.type && payload.type !== 'recovery') {
-    throw new Error('Invalid reset link type. Please request a new one.');
+  if (payload.error) {
+    throw new Error(payload.errorDescription || payload.error);
   }
 
   if (payload.accessToken && payload.refreshToken) {
@@ -60,10 +54,27 @@ async function bindRecoverySession(payload) {
     return;
   }
 
-  if (payload.tokenHash && payload.email) {
-    const { error } = await supabase.auth.verifyOtp({
-      type: 'recovery',
+  const otpType = payload.type || 'recovery';
+
+  if (payload.tokenHash) {
+    const verifyInput = {
+      type: otpType,
       token_hash: payload.tokenHash,
+    };
+
+    if (payload.email) {
+      verifyInput.email = payload.email;
+    }
+
+    const { error } = await supabase.auth.verifyOtp(verifyInput);
+    if (error) throw error;
+    return;
+  }
+
+  if (payload.token && payload.email) {
+    const { error } = await supabase.auth.verifyOtp({
+      type: otpType,
+      token: payload.token,
       email: payload.email,
     });
     if (error) throw error;
@@ -89,48 +100,26 @@ export default function ResetPasswordPage() {
     const ensureRecoverySession = async () => {
       try {
         const payload = extractRecoveryPayload(window.location.href);
-        const hasRecoveryToken = Boolean(
-          payload.accessToken || payload.refreshToken || payload.authCode || payload.tokenHash || payload.errorCode
-        );
+        const hasPayload =
+          payload.accessToken ||
+          payload.refreshToken ||
+          payload.authCode ||
+          payload.tokenHash ||
+          payload.token ||
+          payload.error;
 
-        if (hasRecoveryToken) {
-          // Check if user is on mobile device
-          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-          
-          if (isMobile) {
-            // Redirect to mobile app with recovery tokens
-            const mobileUrl = new URL('internly://reset-password');
-            if (payload.accessToken) mobileUrl.searchParams.set('access_token', payload.accessToken);
-            if (payload.refreshToken) mobileUrl.searchParams.set('refresh_token', payload.refreshToken);
-            if (payload.authCode) mobileUrl.searchParams.set('code', payload.authCode);
-            if (payload.tokenHash) mobileUrl.searchParams.set('token_hash', payload.tokenHash);
-            if (payload.email) mobileUrl.searchParams.set('email', payload.email);
-            if (payload.type) mobileUrl.searchParams.set('type', payload.type);
-            
-            // Attempt to open mobile app
-            window.location.href = mobileUrl.toString();
-            
-            // Fallback message if app doesn't open
-            setTimeout(() => {
-              if (mounted) {
-                setError('Please open this link on your mobile device with the Internly app installed.');
-                setChecking(false);
-              }
-            }, 2000);
-            return;
-          }
-
+        if (hasPayload) {
           await bindRecoverySession(payload);
           if (!mounted) return;
           setReady(true);
           setError('');
-          // Clear sensitive tokens from URL after successful verification.
           window.history.replaceState({}, document.title, window.location.pathname);
           return;
         }
 
         const { data } = await supabase.auth.getSession();
         if (!mounted) return;
+
         if (!data?.session?.user) {
           setReady(false);
           setError('This reset link is invalid or expired. Please request a new one.');
@@ -139,7 +128,6 @@ export default function ResetPasswordPage() {
         }
       } catch (err) {
         if (mounted) {
-          console.error('Reset password validation error:', err);
           setReady(false);
           setError(err?.message || 'Unable to validate reset link. Please request a new one.');
         }
@@ -150,7 +138,9 @@ export default function ResetPasswordPage() {
 
     ensureRecoverySession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
       if (!mounted) return;
       if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
         setReady(true);
@@ -179,11 +169,13 @@ export default function ResetPasswordPage() {
       setSuccess('');
       return;
     }
+
     if (newPassword.length < 6) {
       setError('Password must be at least 6 characters.');
       setSuccess('');
       return;
     }
+
     if (newPassword !== confirmPassword) {
       setError('Passwords do not match.');
       setSuccess('');
@@ -232,7 +224,7 @@ export default function ResetPasswordPage() {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             placeholder="Enter new password"
-            disabled={loading || checking}
+            disabled={checking || loading}
             autoComplete="new-password"
             required
           />
@@ -244,17 +236,19 @@ export default function ResetPasswordPage() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder="Confirm new password"
-            disabled={loading || checking}
+            disabled={checking || loading}
             autoComplete="new-password"
             required
           />
 
-          <button type="submit" disabled={loading || checking}>
-            {loading ? 'Updating...' : 'Update Password'}
+          <button type="submit" disabled={checking || loading}>
+            {checking ? 'Validating link...' : loading ? 'Updating...' : 'Update Password'}
           </button>
         </form>
 
-        <Link to="/login" className="reset-back-link">Back to login</Link>
+        <Link to="/login" className="reset-back-link">
+          Back to Login
+        </Link>
       </div>
     </div>
   );

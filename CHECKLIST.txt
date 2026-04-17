@@ -1,0 +1,144 @@
+╔══════════════════════════════════════════════════════════════╗
+║         REGISTRATION FIX - CHECKLIST                         ║
+║         Sundin ito step-by-step                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+BEFORE YOU START:
+[ ] Buksan ang Supabase Dashboard (https://supabase.com/dashboard)
+[ ] Piliin ang project: yypexrwzgcdqmpvinfyt
+[ ] Sigurado na may internet connection
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1: DISABLE EMAIL CONFIRMATION
+[ ] Click "Authentication" sa left sidebar
+[ ] Click "Settings"
+[ ] Scroll down to "Email Auth" section
+[ ] Find "Enable email confirmations"
+[ ] Toggle to OFF (disabled)
+[ ] Click "Save" button
+[ ] Verify: "Enable email confirmations" is OFF ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 2: RUN SQL FIX
+[ ] Click "SQL Editor" sa left sidebar
+[ ] Click "New Query" button
+[ ] Open file: FINAL_FIX_REGISTRATION.sql
+[ ] Select ALL content (Ctrl+A)
+[ ] Copy (Ctrl+C)
+[ ] Paste sa SQL Editor (Ctrl+V)
+[ ] Click "Run" button (or Ctrl+Enter)
+[ ] Wait for execution
+[ ] Verify: "Success. No rows returned" appears ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 3: VERIFY SQL FIX (OPTIONAL)
+[ ] Sa SQL Editor, run this query:
+
+    SELECT schemaname, tablename, policyname, cmd, roles, with_check 
+    FROM pg_policies 
+    WHERE tablename = 'users' AND policyname = 'users_insert_own';
+
+[ ] Verify result shows:
+    - cmd: INSERT
+    - roles: {authenticated}
+    - with_check: (id = auth.uid())
+
+[ ] Run this query:
+
+    SELECT grantee, privilege_type 
+    FROM information_schema.role_table_grants 
+    WHERE table_name = 'users' AND grantee = 'authenticated'
+    ORDER BY privilege_type;
+
+[ ] Verify result shows:
+    - authenticated | INSERT
+    - authenticated | SELECT
+    - authenticated | UPDATE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 4: TEST REGISTRATION
+[ ] Close ang mobile app completely
+[ ] Open ang app ulit
+[ ] Tap "Create one" to register
+[ ] Fill in ALL fields:
+    [ ] First Name: (e.g., Juan)
+    [ ] Middle Name: (optional)
+    [ ] Last Name: (e.g., Dela Cruz)
+    [ ] Student ID: (e.g., 2021-12345)
+    [ ] Email: (e.g., juan.delacruz@example.com)
+    [ ] Password: (at least 6 characters)
+    [ ] Confirm Password: (same as password)
+    [ ] Program: (e.g., BSIT)
+    [ ] Year Level: (e.g., 4)
+    [ ] Required Hours: (default 486)
+    [ ] Start Date: (select from calendar)
+    [ ] Company: (select from dropdown)
+    [ ] Company Address: (auto-filled or manual)
+    [ ] Supervisor: (e.g., Maria Santos)
+[ ] Tap "Create Account" button
+[ ] Wait for processing
+[ ] Verify: "Account created successfully!" message ✓
+[ ] Verify: Auto-login to Dashboard ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 5: VERIFY IN SUPABASE (OPTIONAL)
+[ ] Go to Supabase Dashboard
+[ ] Click "Authentication" → "Users"
+[ ] Verify: New user appears in list ✓
+[ ] Click "Table Editor" → "users"
+[ ] Verify: User profile with all details ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+IF THERE'S AN ERROR:
+
+Error: "new row violates row-level security policy"
+→ [ ] Run FINAL_FIX_REGISTRATION.sql again
+→ [ ] Make sure you ran the ENTIRE script
+
+Error: "502 Bad Gateway"
+→ [ ] Check if email confirmation is OFF
+→ [ ] Disable it and try again
+
+Error: "permission denied for table users"
+→ [ ] Run FINAL_FIX_REGISTRATION.sql again
+→ [ ] The grants are included in the script
+
+Error: "Failed to create user account"
+→ [ ] Check internet connection
+→ [ ] Check Supabase project status
+→ [ ] Try again after a few seconds
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TROUBLESHOOTING:
+[ ] Read BASAHIN_MO_ITO.md for detailed guide
+[ ] Check Supabase Logs: Dashboard → Logs → Postgres Logs
+[ ] Verify all steps were completed in order
+[ ] Restart app completely
+[ ] Try with different email address
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FINAL CHECK:
+[ ] Email confirmation is OFF
+[ ] SQL fix was run successfully
+[ ] Registration works
+[ ] User can login
+[ ] Dashboard loads properly
+
+╔══════════════════════════════════════════════════════════════╗
+║                    ✅ ALL DONE!                              ║
+║         Registration should work perfectly now!              ║
+╚══════════════════════════════════════════════════════════════╝
+
+If you completed all steps and it still doesn't work:
+1. Screenshot the error
+2. Check Supabase Postgres Logs
+3. Read BASAHIN_MO_ITO.md completely
+4. Verify email confirmation is really OFF

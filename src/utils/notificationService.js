@@ -6,9 +6,14 @@ import Constants from 'expo-constants';
 const PUSH_TOKEN_TABLE = 'device_tokens';
 
 const isRemotePushEnabled = () => {
+  const envValue = process.env.EXPO_PUBLIC_ENABLE_REMOTE_PUSH;
+  const configValue = Constants.expoConfig?.extra?.enableRemotePush;
+
+  // Allow env var to override app config so remote push can be toggled per build profile.
   const rawValue =
-    Constants.expoConfig?.extra?.enableRemotePush ??
-    process.env.EXPO_PUBLIC_ENABLE_REMOTE_PUSH;
+    envValue !== undefined && envValue !== null && String(envValue).trim() !== ''
+      ? envValue
+      : configValue;
 
   return rawValue === true || String(rawValue).toLowerCase() === 'true';
 };

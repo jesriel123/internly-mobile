@@ -1,6 +1,8 @@
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
+import * as Linking from 'expo-linking';
 import { supabase } from '../../supabaseConfig';
 import { registerForPushNotifications, deactivateDeviceToken } from '../utils/notificationService';
+import { subscribeToNotifications } from '../utils/realtimeNotifications';
 
 const writeAuditLog = async (userId, userName, userRole, action, details) => {
   try {
@@ -8,7 +10,113 @@ const writeAuditLog = async (userId, userName, userRole, action, details) => {
   } catch (_) {}
 };
 
+const createLoginNotification = async (userId, userName, userCompany) => {
+  try {
+    console.log('[AuthContext] Creating login notification for:', userName);
+    
+    // Get all admins and super_admins
+    const { data: adminUsers, error: adminError } = await supabase
+      .from('users')
+      .select('id, role, company')
+      .in('role', ['admin', 'super_admin']);
+
+    if (adminError) {
+      console.error('[AuthContext] Error fetching admins:', adminError);
+      return;
+    }
+
+    // Filter recipients: admins of same company + all super_admins
+    const recipients = (adminUsers || []).filter(
+      u => u.role === 'super_admin' || (u.role === 'admin' && u.company === userCompany)
+    );
+
+    if (recipients.length === 0) {
+      console.log('[AuthContext] No admin recipients found');
+      return;
+    }
+
+    const notificationId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const now = new Date();
+    const timeString = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const dateString = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    // Create notification record
+    const { error: notifError } = await supabase
+      .from('notifications')
+      .insert({
+        id: notificationId,
+        sender_id: userId,
+        sender_role: 'user',
+        target_company: userCompany,
+        target_role: 'admin',
+        title: 'User Logged In',
+        message: `${userName} logged in to the mobile app at ${timeString} on ${dateString}`,
+        is_global: false,
+        notification_type: 'user_login',
+      });
+
+    if (notifError) {
+      console.error('[AuthContext] Error creating notification:', notifError);
+      return;
+    }
+
+    // Create notification logs for each recipient
+    const recipientIds = recipients.map(u => u.id).filter(Boolean);
+    const { error: logsError } = await supabase.rpc('create_notification_logs', {
+      _notification_id: notificationId,
+      _recipient_ids: recipientIds,
+      _default_status: 'sent',
+    });
+
+    if (logsError) {
+      console.warn('[AuthContext] Failed to create notification logs:', logsError);
+    } else {
+      console.log('[AuthContext] Login notification created for', recipients.length, 'admins');
+    }
+  } catch (error) {
+    console.error('[AuthContext] Error creating login notification:', error);
+  }
+};
+
 export const AuthContext = createContext(null);
+
+const AUTH_TIMEOUT_MS = 30000;
+const PASSWORD_RESET_PROD_URL = 'https://internly-web.vercel.app/reset-password';
+
+function sanitizeHttpRedirectUrl(rawValue) {
+  const cleaned = String(rawValue || '').trim();
+  if (!cleaned) return null;
+
+  try {
+    const parsed = new URL(cleaned);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function timeoutError(label, ms) {
+  const error = new Error(`${label} timed out after ${Math.round(ms / 1000)}s. Please try again.`);
+  error.code = 'auth/timeout';
+  return error;
+}
+
+async function withTimeout(promise, label, ms = AUTH_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError(label, ms)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -65,19 +173,35 @@ export const AuthProvider = ({ children }) => {
   };
 
   const fetchUserProfile = async (authUser) => {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', authUser.id)
-      .maybeSingle();
+    const { data, error } = await withTimeout(
+      supabase
+        .from('users')
+        .select('*')
+        .eq('id', authUser.id)
+        .maybeSingle(),
+      'Loading user profile'
+    );
     if (error) throw error;
+    
+    // Check if user was deleted
+    if (!data) {
+      // User doesn't exist in database, sign them out
+      await supabase.auth.signOut();
+      const deletedError = new Error('Your account has been deleted. Please contact your administrator.');
+      deletedError.code = 'auth/user-deleted';
+      throw deletedError;
+    }
+    
     return mapProfile(data, authUser);
   };
 
   const refreshProfile = useCallback(async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await withTimeout(
+        supabase.auth.getSession(),
+        'Checking current session'
+      );
       if (!session?.user) {
         setUser(null);
         return null;
@@ -92,26 +216,92 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     let mounted = true;
+    let userSubscription = null;
+    let notificationSubscription = null;
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      try {
-        if (session?.user) {
-          const profile = await fetchUserProfile(session.user);
-          if (mounted) setUser(profile);
+    withTimeout(supabase.auth.getSession(), 'Checking current session')
+      .then(async ({ data: { session } }) => {
+        try {
+          if (session?.user) {
+            const profile = await fetchUserProfile(session.user);
+            if (mounted) setUser(profile);
+            
+            // Subscribe to user changes to detect deletion
+            userSubscription = supabase
+              .channel(`user-${session.user.id}`)
+              .on(
+                'postgres_changes',
+                {
+                  event: 'DELETE',
+                  schema: 'public',
+                  table: 'users',
+                  filter: `id=eq.${session.user.id}`,
+                },
+                async () => {
+                  console.log('[AuthContext] User was deleted, signing out...');
+                  await supabase.auth.signOut();
+                  if (mounted) {
+                    setUser(null);
+                    alert('Your account has been deleted. Please contact your administrator.');
+                  }
+                }
+              )
+              .subscribe();
+
+            // Subscribe to real-time notifications
+            console.log('[AuthContext] Setting up real-time notifications...');
+            notificationSubscription = subscribeToNotifications(
+              session.user.id,
+              (notification) => {
+                console.log('[AuthContext] New notification received:', notification.title);
+                // Notification will be shown automatically by realtimeNotifications.js
+              }
+            );
+          }
+        } catch (e) {
+          if (mounted) setUser(null);
+        } finally {
+          if (mounted) setLoading(false);
         }
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    });
+      })
+      .catch(() => {
+        if (mounted) {
+          setUser(null);
+          setLoading(false);
+        }
+      });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       try {
         if (session?.user) {
           const profile = await fetchUserProfile(session.user);
           if (mounted) setUser(profile);
+
+          // Subscribe to real-time notifications on login
+          if (event === 'SIGNED_IN' && !notificationSubscription) {
+            console.log('[AuthContext] User signed in, subscribing to notifications...');
+            notificationSubscription = subscribeToNotifications(
+              session.user.id,
+              (notification) => {
+                console.log('[AuthContext] New notification received:', notification.title);
+              }
+            );
+          }
         } else {
           if (mounted) setUser(null);
+          
+          // Unsubscribe from notifications on logout
+          if (notificationSubscription) {
+            console.log('[AuthContext] User signed out, unsubscribing from notifications...');
+            notificationSubscription.unsubscribe();
+            notificationSubscription = null;
+          }
         }
+      } catch (e) {
+        if (e.code === 'auth/user-deleted') {
+          alert(e.message);
+        }
+        if (mounted) setUser(null);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -120,74 +310,212 @@ export const AuthProvider = ({ children }) => {
     return () => {
       mounted = false;
       subscription.unsubscribe();
+      if (userSubscription) {
+        supabase.removeChannel(userSubscription);
+      }
+      if (notificationSubscription) {
+        notificationSubscription.unsubscribe();
+      }
     };
   }, []);
 
   const login = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    const profile = await fetchUserProfile(data.user);
-    setUser(profile);
-    await writeAuditLog(data.user.id, profile.name || email, profile.role, 'USER_LOGIN', `${profile.name || email} logged in to the mobile app`);
-    
-    // Register for push notifications
-    await registerForPushNotifications(data.user.id);
-    
-    return data.user;
+    try {
+      console.log('[AuthContext] Starting login for:', email);
+      
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        'Signing in'
+      );
+      if (error) {
+        console.log('[AuthContext] Auth error:', error);
+        throw error;
+      }
+      
+      console.log('[AuthContext] Auth successful, checking user in database...');
+      
+      // Check if user exists in database
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+      
+      if (userError) {
+        console.log('[AuthContext] Database error:', userError);
+        throw userError;
+      }
+      
+      console.log('[AuthContext] User data:', userData ? 'Found' : 'Not found');
+      
+      if (!userData) {
+        // User was deleted, sign them out
+        console.log('[AuthContext] User not found in database, signing out...');
+        await supabase.auth.signOut();
+        const deletedError = new Error('Your account has been deleted. Please contact your administrator.');
+        deletedError.code = 'auth/user-deleted';
+        throw deletedError;
+      }
+      
+      console.log('[AuthContext] User found, creating profile...');
+      const profile = mapProfile(userData, data.user);
+      setUser(profile);
+      await writeAuditLog(data.user.id, profile.name || email, profile.role, 'USER_LOGIN', `${profile.name || email} logged in to the mobile app`);
+      
+      // Create login notification for admins (only for regular users, not admins)
+      if (profile.role === 'user') {
+        await createLoginNotification(data.user.id, profile.name || email, profile.company);
+      }
+      
+      // Register for push notifications
+      await registerForPushNotifications(data.user.id);
+      
+      console.log('[AuthContext] Login successful!');
+      return data.user;
+    } catch (error) {
+      console.log('[AuthContext] Login failed:', error.message);
+      if (error.code === 'auth/timeout') {
+        const timeoutError = new Error('Login timed out. Please check your connection and try again.');
+        timeoutError.code = 'auth/timeout';
+        throw timeoutError;
+      }
+      throw error;
+    }
   };
 
   const register = async (email, password, userData = {}) => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
-    const role = email.includes('admin') ? 'super_admin' : 'user';
-    const composedName = [
-      userData.firstName,
-      userData.middleName,
-      userData.lastName,
-    ]
-      .map(v => String(v || '').trim())
-      .filter(Boolean)
-      .join(' ');
-    const displayName = composedName || String(userData.fullName || '').trim() || email;
+    try {
+      console.log('[AuthContext] Starting registration for:', email);
 
-    const { error: insertError } = await supabase.from('users').insert([{
-      id: data.user.id,
-      email,
-      name: displayName,
-      role,
-      student_id: userData.studentId || '',
-      program: userData.program || '',
-      year_level: userData.yearLevel || '',
-      section: userData.section || '',
-      company: userData.company || '',
-      company_address: userData.companyAddress || '',
-      supervisor: userData.supervisor || '',
-      start_date: userData.startDate || '',
-      required_hours: userData.requiredHours || 486,
-      daily_max_hours: 8,
-    }]);
-    if (insertError) throw insertError;
+      const requiredValues = {
+        firstName: String(userData.firstName || '').trim(),
+        middleName: String(userData.middleName || '').trim(),
+        lastName: String(userData.lastName || '').trim(),
+        studentId: String(userData.studentId || '').trim(),
+        program: String(userData.program || '').trim(),
+        yearLevel: String(userData.yearLevel || '').trim(),
+        company: String(userData.company || '').trim(),
+        companyAddress: String(userData.companyAddress || '').trim(),
+        supervisor: String(userData.supervisor || '').trim(),
+        startDate: String(userData.startDate || '').trim(),
+      };
+      const requiredHours = Number(userData.requiredHours);
 
-    if (data?.user) {
-      setUser(mapProfile({
-        id: data.user.id,
+      const hasMissingField = Object.values(requiredValues).some(value => !value);
+      if (hasMissingField || !Number.isFinite(requiredHours) || requiredHours <= 0) {
+        throw new Error('Please complete all required registration fields before creating an account.');
+      }
+
+      const composedName = [
+        userData.firstName,
+        userData.middleName,
+        userData.lastName,
+      ]
+        .map(v => String(v || '').trim())
+        .filter(Boolean)
+        .join(' ');
+      const displayName = composedName || String(userData.fullName || '').trim() || email;
+      const role = email.includes('admin') ? 'super_admin' : 'user';
+
+      // Step 1: Create auth user and attach profile fields as metadata.
+      // A database trigger can read these values and create the public.users row without client-side inserts.
+      const { data, error } = await supabase.auth.signUp({
         email,
-        name: displayName,
-        role,
-        student_id: userData.studentId || '',
-        program: userData.program || '',
-        year_level: userData.yearLevel || '',
-        section: userData.section || '',
-        company: userData.company || '',
-        company_address: userData.companyAddress || '',
-        supervisor: userData.supervisor || '',
-        start_date: userData.startDate || '',
-        required_hours: userData.requiredHours || 486,
-        daily_max_hours: 8,
-      }, data.user));
-    }
+        password,
+        options: {
+          data: {
+            name: displayName,
+            role,
+            student_id: userData.studentId || '',
+            program: userData.program || '',
+            year_level: userData.yearLevel || '',
+            section: userData.section || '',
+            company: userData.company || '',
+            company_address: userData.companyAddress || '',
+            supervisor: userData.supervisor || '',
+            start_date: userData.startDate || '',
+            required_hours: requiredHours,
+            daily_max_hours: 8,
+          },
+        },
+      });
+      if (error) {
+        console.log('[AuthContext] Auth signup error:', error);
+        throw error;
+      }
+      
+      if (!data?.user) {
+        throw new Error('Failed to create user account');
+      }
+      
+      console.log('[AuthContext] Auth signup successful, user ID:', data.user.id);
 
-    return data.user;
+      // Step 2: Retry profile lookup for a few seconds while the DB trigger finishes.
+      let userProfile = null;
+      let profileError = null;
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        ({ data: userProfile, error: profileError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', data.user.id)
+          .maybeSingle());
+
+        if (profileError) {
+          break;
+        }
+
+        if (userProfile) {
+          break;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      if (profileError) {
+        console.log('[AuthContext] Profile fetch error:', profileError.message, profileError.code);
+        throw new Error(`Failed to load user profile after registration: ${profileError.message}`);
+      }
+
+      if (!userProfile) {
+        throw new Error('User profile was not created. Run the registration trigger SQL in Supabase first.');
+      }
+
+      console.log('[AuthContext] User profile created successfully');
+
+      // Step 4: Set user state
+      if (data?.user) {
+        setUser(mapProfile(userProfile, data.user));
+      }
+
+      console.log('[AuthContext] Registration completed successfully');
+      return data.user;
+    } catch (error) {
+      console.log('[AuthContext] Registration failed:', error.message);
+      throw error;
+    }
+  };
+
+  const forgotPassword = async (email, redirectTo) => {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanEmail) throw new Error('Email is required.');
+
+    const safeRedirect =
+      sanitizeHttpRedirectUrl(redirectTo) ||
+      sanitizeHttpRedirectUrl(process.env.EXPO_PUBLIC_PASSWORD_RESET_WEB_URL) ||
+      sanitizeHttpRedirectUrl(process.env.EXPO_PUBLIC_PASSWORD_RESET_REDIRECT) ||
+      PASSWORD_RESET_PROD_URL ||
+      Linking.createURL('login');
+
+    console.info('[AUTH-MOBILE] Reset redirect:', safeRedirect);
+
+    const { error } = await withTimeout(
+      supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: safeRedirect,
+      }),
+      'Sending password reset email'
+    );
+    if (error) throw error;
   };
 
   const updateProfile = async (fields) => {
@@ -218,13 +546,13 @@ export const AuthProvider = ({ children }) => {
       // Deactivate push token
       await deactivateDeviceToken(user.uid);
     }
-    const { error } = await supabase.auth.signOut();
+    const { error } = await withTimeout(supabase.auth.signOut(), 'Signing out', 8000);
     if (error) throw error;
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, register, updateProfile, uploadProfilePhoto, refreshProfile }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, register, forgotPassword, updateProfile, uploadProfilePhoto, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

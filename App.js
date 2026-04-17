@@ -4,7 +4,9 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Provider as PaperProvider } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
+import { useFonts } from 'expo-font';
 import { ActivityIndicator, View } from 'react-native';
+import * as Linking from 'expo-linking';
 
 import DashboardScreen from './src/screens/DashboardScreen';
 import TimeLogScreen from './src/screens/TimeLogScreen';
@@ -12,14 +14,36 @@ import HistoryScreen from './src/screens/HistoryScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import AdminScreen from './src/screens/AdminScreen';
+import NotificationsScreen from './src/screens/NotificationsScreen';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
-import { ensureNotificationPermission, setupNotificationListeners } from './src/utils/notificationService';
+import {
+  ensureNotificationPermission,
+  registerForPushNotifications,
+  setupNotificationListeners,
+} from './src/utils/notificationService';
 import { startRealtimeNotificationBridge } from './src/utils/realtimeNotificationBridge';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 const navigationRef = createNavigationContainerRef();
+const linking = {
+  prefixes: [Linking.createURL('/'), 'internly://'],
+  config: {
+    screens: {
+      Login: 'login',
+      Main: {
+        screens: {
+          Dashboard: 'dashboard',
+          TimeLog: 'timelog',
+          History: 'history',
+          Profile: 'profile',
+          Admin: 'admin',
+        },
+      },
+    },
+  },
+};
 
 function LoadingScreen() {
   return (
@@ -37,13 +61,15 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
-          let iconName;
+          let iconName = 'ellipse-outline';
           if (route.name === 'Dashboard') {
             iconName = focused ? 'home' : 'home-outline';
           } else if (route.name === 'TimeLog') {
             iconName = focused ? 'time' : 'time-outline';
           } else if (route.name === 'History') {
             iconName = focused ? 'clipboard' : 'clipboard-outline';
+          } else if (route.name === 'Notifications') {
+            iconName = focused ? 'notifications' : 'notifications-outline';
           } else if (route.name === 'Profile') {
             iconName = focused ? 'person' : 'person-outline';
           } else if (route.name === 'Admin') {
@@ -63,19 +89,12 @@ function MainTabs() {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="TimeLog" component={TimeLogScreen} options={{ title: 'Time Log' }} />
       <Tab.Screen name="History" component={HistoryScreen} />
+      <Tab.Screen name="Notifications" component={NotificationsScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
       {(user?.role === 'admin' || user?.role === 'super_admin') && (
         <Tab.Screen name="Admin" component={AdminScreen} />
       )}
     </Tab.Navigator>
-  );
-}
-
-function AuthStack() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Login" component={LoginScreen} />
-    </Stack.Navigator>
   );
 }
 
@@ -110,6 +129,10 @@ function AppNavigator() {
   );
 
   useEffect(() => {
+    return undefined;
+  }, []);
+
+  useEffect(() => {
     const { unsubscribeForeground, unsubscribeBackground } = setupNotificationListeners(handleNotificationTap);
     
     return () => {
@@ -132,6 +155,12 @@ function AppNavigator() {
         return;
       }
 
+      // Register push token on session restore as well, not only on explicit login.
+      await registerForPushNotifications(user.uid);
+      if (disposed) {
+        return;
+      }
+
       unsubscribeRealtime = startRealtimeNotificationBridge(user.uid);
     };
 
@@ -148,13 +177,27 @@ function AppNavigator() {
   }
 
   return (
-    <NavigationContainer ref={navigationRef}>
-      {user ? <MainTabs /> : <AuthStack />}
+    <NavigationContainer ref={navigationRef} linking={linking}>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainTabs} />
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
+      </Stack.Navigator>
     </NavigationContainer>
   );
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    ...Ionicons.font,
+  });
+
+  if (!fontsLoaded) {
+    return <LoadingScreen />;
+  }
+
   return (
     <ThemeProvider>
       <PaperProvider>

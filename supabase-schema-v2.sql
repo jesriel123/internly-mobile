@@ -63,7 +63,6 @@ CREATE TABLE settings (
   id TEXT PRIMARY KEY DEFAULT 'global',
   default_required_hours NUMERIC DEFAULT 486,
   default_daily_max_hours NUMERIC DEFAULT 8,
-  holidays JSONB DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -80,8 +79,8 @@ CREATE TABLE audit_logs (
 );
 
 -- Seed default settings
-INSERT INTO settings (id, default_required_hours, default_daily_max_hours, holidays)
-VALUES ('global', 486, 8, '[]')
+INSERT INTO settings (id, default_required_hours, default_daily_max_hours)
+VALUES ('global', 486, 8)
 ON CONFLICT (id) DO NOTHING;
 
 -- Indexes

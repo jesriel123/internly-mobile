@@ -8,15 +8,41 @@ import { useTheme } from '../context/ThemeContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../supabaseConfig';
 import { getCachedTimeLogs, invalidateTimeLogsCache } from '../utils/timeLogsCache';
+import { createClockNotification } from '../utils/notificationHelper';
 
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const PH_TIMEZONE = 'Asia/Manila';
+
+function getPHDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: PH_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const year = parts.find(part => part.type === 'year')?.value;
+  const month = parts.find(part => part.type === 'month')?.value;
+  const day = parts.find(part => part.type === 'day')?.value;
+
+  return { year, month, day };
 }
 
-function isWeekend() {
-  const day = new Date().getDay();
-  return day === 0 || day === 6;
+function todayKey(date = new Date()) {
+  const { year, month, day } = getPHDateParts(date);
+  return `${year}-${month}-${day}`;
+}
+
+function isWeekend(date = new Date()) {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: PH_TIMEZONE,
+    weekday: 'short',
+  }).format(date);
+  return weekday === 'Sat' || weekday === 'Sun';
+}
+
+function getPHWorkStartBoundary(dateKey) {
+  // 8:00 AM Asia/Manila is 00:00 UTC for the same calendar date.
+  return new Date(`${dateKey}T00:00:00.000Z`);
 }
 
 export default function TimeLogScreen() {
@@ -30,7 +56,7 @@ export default function TimeLogScreen() {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const dailyMax = user?.setup?.dailyMaxHours || 8;
-  const weekend = isWeekend();
+  const weekend = isWeekend(currentTime);
 
   // Clock effect
   useEffect(() => {
@@ -77,7 +103,7 @@ export default function TimeLogScreen() {
     try {
       const key = todayKey();
       const now = new Date();
-      const { error } = await supabase.from('time_logs').upsert([{
+      const { data, error } = await supabase.from('time_logs').upsert([{
         user_id: user.uid,
         date: key,
         time_in: now.toISOString(),
@@ -86,19 +112,50 @@ export default function TimeLogScreen() {
         status: 'pending',
         created_at: now.toISOString(),
         updated_at: now.toISOString(),
-      }], { onConflict: 'user_id,date' });
+      }], { onConflict: 'user_id,date' }).select();
       if (error) throw error;
+      
+      const logId = data?.[0]?.id;
+      
       // Write audit log
+      const nowTimePH = now.toLocaleTimeString('en-US', {
+        timeZone: PH_TIMEZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+
       await supabase.from('audit_logs').insert([{
         user_id: user.uid,
         user_name: user.name || user.email,
         user_role: 'user',
         action: 'CLOCK_IN',
-        details: `${user.name || user.email} clocked IN on ${key} at ${now.toLocaleTimeString()}`,
+        details: `${user.name || user.email} clocked IN on ${key} at ${nowTimePH} (PH)`,
       }]);
+      
+      // Create notification for admins
+      console.log('[TimeLogScreen] About to create clock_in notification...');
+      Alert.alert('Debug', 'Creating notification...');
+      try {
+        await createClockNotification({
+          type: 'clock_in',
+          userId: user.uid,
+          userName: user.name || user.email,
+          userCompany: user.company || '',
+          logDate: key,
+          logId,
+          time: now.toLocaleTimeString('en-US', { timeZone: PH_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: true }),
+        });
+        console.log('[TimeLogScreen] Clock_in notification call completed');
+        Alert.alert('Debug', 'Notification created!');
+      } catch (notifError) {
+        console.error('[TimeLogScreen] Notification error:', notifError);
+        Alert.alert('Debug Error', notifError.message);
+      }
+      
       invalidateTimeLogsCache(user.uid);
       await fetchLogs();
-      Alert.alert('Clocked In', `Time In recorded at ${now.toLocaleTimeString()}`);
+      Alert.alert('Clocked In', `Time In recorded at ${nowTimePH} (PH)`);
     } catch (e) {
       Alert.alert('Error', e.message);
     } finally { setBusy(false); }
@@ -114,7 +171,10 @@ export default function TimeLogScreen() {
       const key = todayKey();
       const now = new Date();
       const timeInDate = new Date(todayLog.timeIn);
-      let rawHours = (now - timeInDate) / (1000 * 60 * 60);
+      const workStartBoundary = getPHWorkStartBoundary(key);
+      const effectiveStart = timeInDate < workStartBoundary ? workStartBoundary : timeInDate;
+      let rawHours = (now - effectiveStart) / (1000 * 60 * 60);
+      if (rawHours < 0) rawHours = 0;
       let capped = false;
       if (rawHours > dailyMax) { capped = true; rawHours = dailyMax; }
       const hours = Math.round(rawHours * 100) / 100;
@@ -124,14 +184,44 @@ export default function TimeLogScreen() {
         .eq('user_id', user.uid)
         .eq('date', key);
       if (error) throw error;
+      
       // Write audit log
+      const nowTimePH = now.toLocaleTimeString('en-US', {
+        timeZone: PH_TIMEZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+
       await supabase.from('audit_logs').insert([{
         user_id: user.uid,
         user_name: user.name || user.email,
         user_role: 'user',
         action: 'CLOCK_OUT',
-        details: `${user.name || user.email} clocked OUT on ${key} at ${now.toLocaleTimeString()} — ${hours.toFixed(2)}h logged`,
+        details: `${user.name || user.email} clocked OUT on ${key} at ${nowTimePH} (PH) - ${hours.toFixed(2)}h logged`,
       }]);
+      
+      // Create notification for admins
+      console.log('[TimeLogScreen] About to create clock_out notification...');
+      Alert.alert('Debug', 'Creating clock out notification...');
+      try {
+        await createClockNotification({
+          type: 'clock_out',
+          userId: user.uid,
+          userName: user.name || user.email,
+          userCompany: user.company || '',
+          logDate: key,
+          logId: todayLog.id,
+          time: now.toLocaleTimeString('en-US', { timeZone: PH_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: true }),
+          hours: hours.toFixed(2),
+        });
+        console.log('[TimeLogScreen] Clock_out notification call completed');
+        Alert.alert('Debug', 'Clock out notification created!');
+      } catch (notifError) {
+        console.error('[TimeLogScreen] Notification error:', notifError);
+        Alert.alert('Debug Error', notifError.message);
+      }
+      
       invalidateTimeLogsCache(user.uid);
       await fetchLogs();
       if (capped) {
@@ -152,11 +242,28 @@ export default function TimeLogScreen() {
   const todayDone = isApproved || (clockedIn && clockedOut);
 
   // Format Time
-  const timeString = currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' }).split(' ');
+  const timeString = currentTime.toLocaleTimeString('en-US', {
+    timeZone: PH_TIMEZONE,
+    hour12: true,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).split(' ');
   const hoursMinutesSeconds = timeString[0];
   const amPm = timeString[1];
-  const clockDateStr = currentTime.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-  const headerDateStr = currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const clockDateStr = currentTime.toLocaleDateString('en-US', {
+    timeZone: PH_TIMEZONE,
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const headerDateStr = currentTime.toLocaleDateString('en-US', {
+    timeZone: PH_TIMEZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -221,14 +328,28 @@ export default function TimeLogScreen() {
               <View style={styles.todayItem}>
                 <MaterialCommunityIcons name="clock-in" size={20} color={COLORS.primary} />
                 <Text style={[styles.todayVal, { color: theme.text }]}>
-                  {todayLog.timeIn ? (todayLog.timeIn.toDate ? todayLog.timeIn.toDate() : new Date(todayLog.timeIn)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                  {todayLog.timeIn
+                    ? (todayLog.timeIn.toDate ? todayLog.timeIn.toDate() : new Date(todayLog.timeIn)).toLocaleTimeString('en-US', {
+                        timeZone: PH_TIMEZONE,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                      })
+                    : '—'}
                 </Text>
                 <Text style={[styles.todaySub, { color: theme.textSecondary }]}>Time In</Text>
               </View>
               <View style={styles.todayItem}>
                 <MaterialCommunityIcons name="clock-out" size={20} color="#F57C00" />
                 <Text style={[styles.todayVal, { color: theme.text }]}>
-                  {todayLog.timeOut ? (todayLog.timeOut.toDate ? todayLog.timeOut.toDate() : new Date(todayLog.timeOut)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                  {todayLog.timeOut
+                    ? (todayLog.timeOut.toDate ? todayLog.timeOut.toDate() : new Date(todayLog.timeOut)).toLocaleTimeString('en-US', {
+                        timeZone: PH_TIMEZONE,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                      })
+                    : '—'}
                 </Text>
                 <Text style={[styles.todaySub, { color: theme.textSecondary }]}>Time Out</Text>
               </View>

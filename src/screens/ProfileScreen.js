@@ -150,21 +150,12 @@ export default function ProfileScreen() {
         <View style={styles.headerWrapper}>
           <LinearGradient
             colors={isDark ? ['#1e1e1e', '#121212'] : ['#6366F1', '#4F46E5']}
-            style={[styles.headerGradient, { height: 230 + insets.top, paddingTop: insets.top }]}
+            style={[styles.headerGradient, { height: 280 + insets.top, paddingTop: insets.top }]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
           >
             <View style={styles.headerTopActions}>
-              <TouchableOpacity 
-                style={styles.headerActionBtn} 
-                onPress={() => toggleTheme()}
-              >
-                <MaterialCommunityIcons 
-                  name={isDark ? "weather-sunny" : "weather-night"} 
-                  size={20} 
-                  color="#FFFFFF" 
-                />
-              </TouchableOpacity>
+              <View style={{ width: 38 }} />
               <TouchableOpacity style={styles.headerActionBtn} onPress={handleEditProfile}>
                 <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
@@ -190,13 +181,13 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.profileName}>{user?.name || 'Student Name'}</Text>
-              <Text style={styles.profileEmail}>{user?.email || 'student@email.com'}</Text>
+              <Text style={styles.profileEmail} ellipsizeMode="tail" numberOfLines={2}>{user?.email || 'student@email.com'}</Text>
             </View>
           </LinearGradient>
         </View>
 
         {/* Stats Section (Floating Card) */}
-        <View style={[styles.statsCard, { backgroundColor: theme.surface, marginTop: -40 }]}>
+        <View style={[styles.statsCard, { backgroundColor: theme.surface, marginTop: -30 }]}>
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
               <Text style={[styles.statValue, { color: theme.primary }]}>{renderedHours.toFixed(1)}h</Text>
@@ -332,13 +323,13 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
   headerWrapper: { overflow: 'hidden' },
-  headerGradient: { paddingHorizontal: 20, borderBottomLeftRadius: 35, borderBottomRightRadius: 35 },
+  headerGradient: { paddingHorizontal: 20, paddingBottom: 42, borderBottomLeftRadius: 35, borderBottomRightRadius: 35 },
   headerTopActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
   headerActionBtn: {
     width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.15)',
     justifyContent: 'center', alignItems: 'center',
   },
-  profileMainInfo: { alignItems: 'center', marginTop: 5 },
+  profileMainInfo: { alignItems: 'center', marginTop: 8, marginBottom: 28, width: '100%', paddingHorizontal: 16 },
   avatarWrapper: { position: 'relative', marginBottom: 12 },
   avatarImage: { width: 90, height: 90, borderRadius: 45, borderWidth: 3, borderColor: 'rgba(255,255,255,0.3)' },
   avatarPlaceholder: {
@@ -350,8 +341,8 @@ const styles = StyleSheet.create({
     width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
     elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 2,
   },
-  profileName: { fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
-  profileEmail: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  profileName: { fontSize: 24, fontWeight: '800', color: '#FFFFFF', marginBottom: 8, textAlign: 'center' },
+  profileEmail: { fontSize: 12, color: 'rgba(255,255,255,0.95)', marginTop: 4, fontWeight: '500', textAlign: 'center', lineHeight: 16, width: '85%', paddingHorizontal: 12 },
   statsCard: {
     marginHorizontal: 20, borderRadius: 24, padding: 20,
     elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.1, shadowRadius: 15,

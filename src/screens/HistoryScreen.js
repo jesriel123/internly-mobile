@@ -175,9 +175,6 @@ export default function HistoryScreen() {
           <Text style={[styles.headerTitle, { color: theme.text }]}>Log History</Text>
           <Text style={[styles.headerSubtitle, { color: theme.textSecondary }]}>{monthEntriesCount} entries this month</Text>
         </View>
-        <TouchableOpacity style={[styles.menuButton, { backgroundColor: isDark ? '#2A2A2A' : '#E5E7EB' }]}>
-          <MaterialCommunityIcons name="menu" size={24} color={isDark ? '#E5E7EB' : '#4B5563'} />
-        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -263,20 +260,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 60,
     paddingBottom: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
   },
   headerTitle: { fontSize: 24, fontWeight: '800', color: '#111827' },
   headerSubtitle: { fontSize: 14, color: '#6B7280', marginTop: 2 },
-  menuButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#E5E7EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
   calendarCard: {
     backgroundColor: '#FFFFFF',
