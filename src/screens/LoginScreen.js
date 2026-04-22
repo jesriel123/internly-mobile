@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity, Alert, StatusBar, Modal } from 'react-native';
+import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity, StatusBar, Modal, Image } from 'react-native';
 import { TextInput, Button, Title, Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,6 +9,19 @@ import { COLORS } from '../constants/theme';
 import { supabase } from '../../supabaseConfig';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const TITAN_LOGO = require('../../assets/icon.png');
+
+const INPUT_THEME = {
+  colors: {
+    text: '#2D2856',
+    onSurface: '#2D2856',
+    onSurfaceVariant: '#6B7280',
+    primary: COLORS.primary,
+    placeholder: '#6B7280',
+    outline: '#CFCFE8',
+    background: '#FFFFFF',
+  },
+};
 
 const getPasswordValidation = (rawPassword) => {
   const value = String(rawPassword || '');
@@ -89,6 +102,12 @@ export default function LoginScreen() {
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [sendingReset, setSendingReset] = useState(false);
+  const [feedbackModal, setFeedbackModal] = useState({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'error',
+  });
 
   // Register form state
   const [firstName, setFirstName] = useState('');
@@ -208,7 +227,25 @@ export default function LoginScreen() {
 
   const showError = (message) => {
     setErrorMessage(message);
-    Alert.alert('Error', message);
+    setFeedbackModal({
+      visible: true,
+      title: 'Error',
+      message,
+      type: 'error',
+    });
+  };
+
+  const showSuccess = (message) => {
+    setFeedbackModal({
+      visible: true,
+      title: 'Success',
+      message,
+      type: 'success',
+    });
+  };
+
+  const closeFeedbackModal = () => {
+    setFeedbackModal(prev => ({ ...prev, visible: false }));
   };
 
   const handleRegister = async () => {
@@ -300,7 +337,7 @@ export default function LoginScreen() {
         companyAddress: trimmedCompanyAddress,
         supervisor: trimmedSupervisor
       });
-      Alert.alert('Success', 'Account created successfully!');
+      showSuccess('Account created successfully!');
     } catch (error) {
       console.log('[LoginScreen] Registration error:', error);
       let message = 'Registration failed. Please try again.';
@@ -373,7 +410,7 @@ export default function LoginScreen() {
     try {
       await forgotPassword(cleanEmail);
       setShowForgotModal(false);
-      Alert.alert('Success', 'Password reset link sent. Please check your email.');
+      showSuccess('Password reset link sent. Please check your email.');
     } catch (error) {
       showError(error?.message || 'Failed to send reset email. Please try again.');
     } finally {
@@ -394,7 +431,10 @@ export default function LoginScreen() {
         <LinearGradient colors={[COLORS.primary, '#9370DB']} style={styles.headerBackground}>
           <View style={styles.headerGlowLeft} />
           <View style={styles.headerGlowRight} />
-          <Title style={styles.appTitle}>Internly</Title>
+          <View style={styles.appLogoWrap}>
+            <Image source={TITAN_LOGO} style={styles.appLogo} resizeMode="cover" />
+          </View>
+          <Title style={styles.appTitle}>Titan</Title>
           <Text style={styles.appSubtitle}>OJT Hours & Task Tracker</Text>
         </LinearGradient>
         
@@ -410,28 +450,28 @@ export default function LoginScreen() {
               <Text style={styles.sectionHeading}>PERSONAL INFORMATION</Text>
               
               <View style={styles.inputContainer}>
-                <TextInput label="First Name" value={firstName} onChangeText={t => { setFirstName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account" color={COLORS.primary} />} />
+                <TextInput label="First Name" value={firstName} onChangeText={t => { setFirstName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Middle Name" value={middleName} onChangeText={t => { setMiddleName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account-outline" color={COLORS.primary} />} />
+                <TextInput label="Middle Name" value={middleName} onChangeText={t => { setMiddleName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Last Name" value={lastName} onChangeText={t => { setLastName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account" color={COLORS.primary} />} />
+                <TextInput label="Last Name" value={lastName} onChangeText={t => { setLastName(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Student ID Number" value={studentId} onChangeText={t => { setStudentId(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="card-account-details-outline" color={COLORS.primary} />} />
+                <TextInput label="Student ID Number" value={studentId} onChangeText={t => { setStudentId(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="card-account-details-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Email Address" value={email} onChangeText={t => { setEmail(t); clearError(); }} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} left={<TextInput.Icon icon="email-outline" color={COLORS.primary} />} />
+                <TextInput label="Email Address" value={email} onChangeText={t => { setEmail(t); clearError(); }} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} left={<TextInput.Icon icon="email-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
                 <Text style={styles.emailHint}>Use a valid, active email address so you can recover your password if you forget it.</Text>
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Password" value={password} onChangeText={t => { setPassword(t); clearError(); }} mode="outlined" secureTextEntry style={styles.input} left={<TextInput.Icon icon="lock-outline" color={COLORS.primary} />} />
+                <TextInput label="Password" value={password} onChangeText={t => { setPassword(t); clearError(); }} mode="outlined" secureTextEntry style={styles.input} left={<TextInput.Icon icon="lock-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               {(() => {
@@ -460,23 +500,23 @@ export default function LoginScreen() {
               })()}
 
               <View style={styles.inputContainer}>
-                <TextInput label="Confirm Password" value={confirmPassword} onChangeText={t => { setConfirmPassword(t); clearError(); }} mode="outlined" secureTextEntry style={styles.input} left={<TextInput.Icon icon="lock-check-outline" color={COLORS.primary} />} />
+                <TextInput label="Confirm Password" value={confirmPassword} onChangeText={t => { setConfirmPassword(t); clearError(); }} mode="outlined" secureTextEntry style={styles.input} left={<TextInput.Icon icon="lock-check-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <Text style={[styles.sectionHeading, { marginTop: 20 }]}>ACADEMIC INFORMATION</Text>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Program / Course" value={program} onChangeText={t => { setProgram(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="school-outline" color={COLORS.primary} />} />
+                <TextInput label="Program / Course" value={program} onChangeText={t => { setProgram(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="school-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Year Level" value={yearLevel} onChangeText={t => { setYearLevel(t); clearError(); }} mode="outlined" style={styles.input} />
+                <TextInput label="Year Level" value={yearLevel} onChangeText={t => { setYearLevel(t); clearError(); }} mode="outlined" style={styles.input} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <Text style={[styles.sectionHeading, { marginTop: 20 }]}>OJT INFORMATION</Text>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Required Hours" value={requiredHours} onChangeText={t => { setRequiredHours(t); clearError(); }} keyboardType="numeric" mode="outlined" style={styles.input} left={<TextInput.Icon icon="clock-outline" color={COLORS.primary} />} />
+                <TextInput label="Required Hours" value={requiredHours} onChangeText={t => { setRequiredHours(t); clearError(); }} keyboardType="numeric" mode="outlined" style={styles.input} left={<TextInput.Icon icon="clock-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
@@ -490,6 +530,11 @@ export default function LoginScreen() {
                       editable={false}
                       left={<TextInput.Icon icon="calendar-range" color={COLORS.primary} />}
                       right={<TextInput.Icon icon="menu-down" color={COLORS.primary} />}
+                      textColor="#2D2856"
+                      placeholderTextColor="#6B7280"
+                      selectionColor={COLORS.primary}
+                      cursorColor={COLORS.primary}
+                      theme={INPUT_THEME}
                     />
                   </View>
                 </TouchableOpacity>
@@ -506,17 +551,22 @@ export default function LoginScreen() {
                       editable={false}
                       left={<TextInput.Icon icon="office-building" color={COLORS.primary} />}
                       right={<TextInput.Icon icon="menu-down" color={COLORS.primary} />}
+                      textColor="#2D2856"
+                      placeholderTextColor="#6B7280"
+                      selectionColor={COLORS.primary}
+                      cursorColor={COLORS.primary}
+                      theme={INPUT_THEME}
                     />
                   </View>
                 </TouchableOpacity>
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Company Address" value={companyAddress} onChangeText={t => { setCompanyAddress(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="map-marker-outline" color={COLORS.primary} />} />
+                <TextInput label="Company Address" value={companyAddress} onChangeText={t => { setCompanyAddress(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="map-marker-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Supervisor Name" value={supervisor} onChangeText={t => { setSupervisor(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account-tie" color={COLORS.primary} />} />
+                <TextInput label="Supervisor Name" value={supervisor} onChangeText={t => { setSupervisor(t); clearError(); }} mode="outlined" style={styles.input} left={<TextInput.Icon icon="account-tie" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
@@ -541,11 +591,11 @@ export default function LoginScreen() {
               <Text style={styles.formSubtitle}>Sign in to your account</Text>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Email" value={loginEmail} onChangeText={t => { setLoginEmail(t); clearError(); }} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} left={<TextInput.Icon icon="email-outline" color={COLORS.primary} />} />
+                <TextInput label="Email" value={loginEmail} onChangeText={t => { setLoginEmail(t); clearError(); }} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} left={<TextInput.Icon icon="email-outline" color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               <View style={styles.inputContainer}>
-                <TextInput label="Password" value={loginPassword} onChangeText={t => { setLoginPassword(t); clearError(); }} mode="outlined" secureTextEntry={!showPassword} style={styles.input} left={<TextInput.Icon icon="lock-outline" color={COLORS.primary} />} right={<TextInput.Icon icon={showPassword ? 'eye-off' : 'eye'} onPress={() => setShowPassword(!showPassword)} color={COLORS.primary} />} />
+                <TextInput label="Password" value={loginPassword} onChangeText={t => { setLoginPassword(t); clearError(); }} mode="outlined" secureTextEntry={!showPassword} style={styles.input} left={<TextInput.Icon icon="lock-outline" color={COLORS.primary} />} right={<TextInput.Icon icon={showPassword ? 'eye-off' : 'eye'} onPress={() => setShowPassword(!showPassword)} color={COLORS.primary} />} textColor="#2D2856" placeholderTextColor="#6B7280" selectionColor={COLORS.primary} cursorColor={COLORS.primary} theme={INPUT_THEME} />
               </View>
 
               {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
@@ -647,6 +697,11 @@ export default function LoginScreen() {
                 autoCapitalize="none"
                 style={styles.input}
                 left={<TextInput.Icon icon="email-outline" color={COLORS.primary} />}
+                textColor="#2D2856"
+                placeholderTextColor="#6B7280"
+                selectionColor={COLORS.primary}
+                cursorColor={COLORS.primary}
+                theme={INPUT_THEME}
               />
 
               <View style={styles.forgotActions}>
@@ -661,6 +716,43 @@ export default function LoginScreen() {
                   <Text style={styles.forgotSendText}>{sendingReset ? 'Sending...' : 'Send Link'}</Text>
                 </TouchableOpacity>
               </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        <Modal
+          visible={feedbackModal.visible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeFeedbackModal}
+        >
+          <TouchableOpacity style={styles.feedbackOverlay} activeOpacity={1} onPress={closeFeedbackModal}>
+            <TouchableOpacity style={styles.feedbackCard} activeOpacity={1} onPress={() => {}}>
+              <View style={styles.feedbackHeaderRow}>
+                <View
+                  style={[
+                    styles.feedbackIcon,
+                    feedbackModal.type === 'success' ? styles.feedbackIconSuccess : styles.feedbackIconError,
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name={feedbackModal.type === 'success' ? 'check-bold' : 'alert-circle-outline'}
+                    size={16}
+                    color="#FFFFFF"
+                  />
+                </View>
+                <Text style={styles.feedbackTitle}>{feedbackModal.title}</Text>
+              </View>
+              <Text style={styles.feedbackMessage}>{feedbackModal.message}</Text>
+              <TouchableOpacity
+                style={[
+                  styles.feedbackButton,
+                  feedbackModal.type === 'success' ? styles.feedbackButtonSuccess : styles.feedbackButtonError,
+                ]}
+                onPress={closeFeedbackModal}
+              >
+                <Text style={styles.feedbackButtonText}>OK</Text>
+              </TouchableOpacity>
             </TouchableOpacity>
           </TouchableOpacity>
         </Modal>
@@ -701,6 +793,20 @@ const styles = StyleSheet.create({
     height: 96,
     borderRadius: 48,
     backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  appLogoWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.78)',
+    marginBottom: 10,
+    backgroundColor: 'white',
+  },
+  appLogo: {
+    width: '100%',
+    height: '100%',
   },
   appTitle: { color: 'white', fontSize: 34, fontWeight: '800', letterSpacing: 0.3 },
   appSubtitle: { color: 'rgba(255,255,255,0.84)', fontSize: 13, marginTop: 6, fontWeight: '500' },
@@ -933,5 +1039,73 @@ const styles = StyleSheet.create({
   forgotSendText: {
     color: '#fff',
     fontWeight: '700',
+  },
+  feedbackOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(21, 16, 48, 0.48)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+  },
+  feedbackCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    shadowColor: '#20144A',
+    shadowOpacity: 0.2,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 14,
+  },
+  feedbackHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  feedbackIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  feedbackIconError: {
+    backgroundColor: '#E45757',
+  },
+  feedbackIconSuccess: {
+    backgroundColor: '#2FA56A',
+  },
+  feedbackTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1F1A43',
+  },
+  feedbackMessage: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#524D77',
+    marginBottom: 16,
+  },
+  feedbackButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+  },
+  feedbackButtonError: {
+    backgroundColor: '#E45757',
+  },
+  feedbackButtonSuccess: {
+    backgroundColor: COLORS.primary,
+  },
+  feedbackButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });

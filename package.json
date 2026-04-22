@@ -20,7 +20,9 @@
     "web:vscode": "cross-env EXPO_USE_POLLING=1 CHOKIDAR_USEPOLLING=1 expo start --web --lan --clear --port 8082",
     "build:dev:android": "eas build --profile development --platform android",
     "build:preview:android": "eas build --profile preview --platform android",
-    "build:prod:android": "eas build --profile production --platform android"
+    "build:prod:android": "eas build --profile production --platform android",
+    "update:preview": "eas update --branch preview --message \"Preview OTA update\"",
+    "update:prod": "eas update --branch production --message \"Production OTA update\""
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",
@@ -43,7 +45,10 @@
     "expo-keep-awake": "~14.1.4",
     "expo-linear-gradient": "~14.1.5",
     "expo-notifications": "~0.31.5",
+    "expo-print": "~14.1.4",
+    "expo-sharing": "~13.1.5",
     "expo-status-bar": "~2.2.3",
+    "expo-updates": "~0.28.18",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.6",

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, StatusBar, SafeAreaView, ActivityIndicator, Modal } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, StatusBar, SafeAreaView, ActivityIndicator, Platform } from 'react-native';
 import { Text, Portal, Modal as PaperModal, Button, IconButton } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS } from '../constants/theme';
@@ -176,11 +176,28 @@ export default function NotificationsScreen() {
             {unreadCount > 0 ? `${unreadCount} unread updates` : 'All caught up'}
           </Text>
         </View>
-        {unreadCount > 0 && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-          </View>
-        )}
+        <View
+          style={[
+            styles.headerBellWrap,
+            {
+              backgroundColor: isDark ? '#1B263B' : '#EEF2FF',
+              borderColor: isDark ? '#2A3A58' : '#DCE6FF',
+            },
+          ]}
+        >
+          <MaterialCommunityIcons name="bell-outline" size={20} color={COLORS.primary} />
+          {unreadCount > 0 && (
+            <View
+              style={[
+                styles.badge,
+                unreadCount > 9 && styles.badgeWide,
+                { borderColor: isDark ? '#121212' : '#FFFFFF' },
+              ]}
+            >
+              <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+            </View>
+          )}
+        </View>
       </View>
 
       <ScrollView
@@ -269,6 +286,18 @@ export default function NotificationsScreen() {
                         )}
                       </View>
 
+                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', marginLeft: 10 }}>
+                        <MaterialCommunityIcons name="chevron-right" size={20} color={subtextColor + '60'} />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )
+          ))
+        )}
+      </ScrollView>
+
       {/* Notification Detail Modal */}
       <Portal>
         <PaperModal
@@ -291,6 +320,7 @@ export default function NotificationsScreen() {
                   size={24}
                   onPress={closeModal}
                   style={styles.closeButton}
+                  iconColor={textColor}
                 />
               </View>
 
@@ -305,7 +335,7 @@ export default function NotificationsScreen() {
                 </Text>
               </View>
 
-              <ScrollView style={styles.modalMessageScroll}>
+              <ScrollView style={styles.modalMessageScroll} showsVerticalScrollIndicator={false}>
                 <Text style={[styles.modalMessage, { color: textColor }]}>
                   {selectedNotif.notification.message}
                 </Text>
@@ -315,8 +345,8 @@ export default function NotificationsScreen() {
                 <Button
                   mode="outlined"
                   onPress={markSelectedNotificationAsRead}
-                  style={styles.modalSecondaryBtn}
-                  labelStyle={styles.modalSecondaryBtnLabel}
+                  style={[styles.modalSecondaryBtn, { borderColor: COLORS.primary }]}
+                  labelStyle={[styles.modalSecondaryBtnLabel, { color: COLORS.primary }]}
                 >
                   Mark as Read
                 </Button>
@@ -325,7 +355,7 @@ export default function NotificationsScreen() {
               <Button 
                 mode="contained" 
                 onPress={closeModal}
-                style={styles.modalActionBtn}
+                style={[styles.modalActionBtn, { backgroundColor: COLORS.primary }]}
                 labelStyle={styles.modalActionBtnLabel}
               >
                 Close
@@ -334,16 +364,6 @@ export default function NotificationsScreen() {
           )}
         </PaperModal>
       </Portal>
-                      
-                      <MaterialCommunityIcons name="chevron-right" size={20} color={subtextColor + '60'} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )
-          ))
-        )}
-      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -357,9 +377,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 14,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 8 : 14,
     paddingBottom: 20,
     borderBottomWidth: 1,
+  },
+  headerBellWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
   headerTitle: {
     fontSize: 28,
@@ -375,16 +404,24 @@ const styles = StyleSheet.create({
   badge: {
     backgroundColor: '#FF3B30',
     borderRadius: 99,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    minWidth: 28,
+    paddingHorizontal: 6,
+    minWidth: 22,
+    height: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    borderWidth: 1.5,
+  },
+  badgeWide: {
+    minWidth: 28,
+    paddingHorizontal: 7,
   },
   badgeText: {
     color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '900',
+    fontSize: 11,
+    fontWeight: '800',
   },
   scrollView: {
     flex: 1,
@@ -427,44 +464,47 @@ const styles = StyleSheet.create({
   modalContainer: {
     margin: 20,
     padding: 24,
-    borderRadius: 24,
-    elevation: 5,
+    paddingTop: 28,
+    borderRadius: 32,
+    elevation: 0,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   modalIconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
+    width: 72,
+    height: 72,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
   closeButton: {
-    margin: -8,
+    margin: -10,
+    opacity: 0.6,
   },
   modalTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '800',
-    marginBottom: 8,
-    lineHeight: 28,
+    marginBottom: 10,
+    lineHeight: 30,
   },
   modalMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 28,
   },
   modalTime: {
     fontSize: 13,
     marginLeft: 6,
     fontWeight: '600',
+    letterSpacing: 0.2,
   },
   modalMessageScroll: {
-    maxHeight: 300,
-    marginBottom: 24,
+    maxHeight: 250,
+    marginBottom: 36,
   },
   modalMessage: {
     fontSize: 16,
@@ -472,26 +512,25 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   modalActionBtn: {
-    borderRadius: 14,
-    paddingVertical: 4,
-    backgroundColor: COLORS.primary,
+    borderRadius: 100,
+    paddingVertical: 8,
   },
   modalSecondaryBtn: {
-    borderRadius: 14,
-    paddingVertical: 4,
-    marginBottom: 12,
-    borderColor: COLORS.primary,
+    borderRadius: 100,
+    paddingVertical: 8,
+    marginBottom: 16,
+    borderWidth: 1.5,
   },
   modalSecondaryBtnLabel: {
     fontSize: 16,
     fontWeight: '700',
     textTransform: 'none',
-    color: COLORS.primary,
   },
   modalActionBtnLabel: {
     fontSize: 16,
     fontWeight: '700',
     textTransform: 'none',
+    color: '#FFFFFF',
   },
   emptyText: {
     fontSize: 15,

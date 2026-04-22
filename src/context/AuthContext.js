@@ -1,7 +1,9 @@
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import * as Linking from 'expo-linking';
+import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../supabaseConfig';
-import { registerForPushNotifications, deactivateDeviceToken } from '../utils/notificationService';
+import { registerForPushNotifications, deactivateCurrentDeviceToken, isCurrentDeviceTokenActive } from '../utils/notificationService';
 import { subscribeToNotifications } from '../utils/realtimeNotifications';
 
 const writeAuditLog = async (userId, userName, userRole, action, details) => {
@@ -122,6 +124,38 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const ensureDeviceRegistered = useCallback(async (userId) => {
+    if (!userId) return;
+    try {
+      await registerForPushNotifications(userId);
+    } catch (error) {
+      // Non-blocking: auth flow should continue even if token registration fails.
+      console.warn('[AuthContext] Device registration failed:', error?.message || error);
+    }
+  }, []);
+
+  const ensureCurrentDeviceStillAllowed = useCallback(async (userId, { notify = true } = {}) => {
+    try {
+      const isActive = await isCurrentDeviceTokenActive(userId);
+      if (isActive) {
+        return true;
+      }
+
+      await supabase.auth.signOut({ scope: 'local' });
+      setUser(null);
+      if (notify) {
+        Alert.alert(
+          'Session ended',
+          'This device was removed from your account and has been logged out for security.'
+        );
+      }
+      return false;
+    } catch (error) {
+      console.warn('[AuthContext] Device access check failed:', error?.message || error);
+      return true;
+    }
+  }, []);
+
   const mapProfile = (data, authUser) => {
     if (!data) {
       return {
@@ -206,13 +240,19 @@ export const AuthProvider = ({ children }) => {
         setUser(null);
         return null;
       }
+
+      const allowed = await ensureCurrentDeviceStillAllowed(session.user.id);
+      if (!allowed) {
+        return null;
+      }
+
       const profile = await fetchUserProfile(session.user);
       setUser(profile);
       return profile;
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [ensureCurrentDeviceStillAllowed]);
 
   useEffect(() => {
     let mounted = true;
@@ -223,6 +263,13 @@ export const AuthProvider = ({ children }) => {
       .then(async ({ data: { session } }) => {
         try {
           if (session?.user) {
+            await ensureDeviceRegistered(session.user.id);
+
+            const allowed = await ensureCurrentDeviceStillAllowed(session.user.id, { notify: false });
+            if (!allowed) {
+              return;
+            }
+
             const profile = await fetchUserProfile(session.user);
             if (mounted) setUser(profile);
             
@@ -274,6 +321,18 @@ export const AuthProvider = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       try {
         if (session?.user) {
+          await ensureDeviceRegistered(session.user.id);
+
+          // Important behavior: removing a device should end the current session,
+          // but should NOT permanently block future login with correct credentials.
+          // For fresh SIGNED_IN events, re-register this device token first.
+          if (event !== 'SIGNED_IN') {
+            const allowed = await ensureCurrentDeviceStillAllowed(session.user.id);
+            if (!allowed) {
+              return;
+            }
+          }
+
           const profile = await fetchUserProfile(session.user);
           if (mounted) setUser(profile);
 
@@ -317,7 +376,47 @@ export const AuthProvider = ({ children }) => {
         notificationSubscription.unsubscribe();
       }
     };
-  }, []);
+  }, [ensureCurrentDeviceStillAllowed, ensureDeviceRegistered]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      return undefined;
+    }
+
+    const checkSundayLogout = async () => {
+      try {
+        const lastLoginDate = await AsyncStorage.getItem('lastLoginDate');
+        const now = new Date();
+        const currentDay = now.getDay(); // 0 = Sunday
+        
+        if (currentDay === 0 && lastLoginDate) {
+          const lastLogin = new Date(lastLoginDate);
+          const lastLoginDay = lastLogin.getDay();
+          
+          // If last login was not Sunday, logout
+          if (lastLoginDay !== 0) {
+            Alert.alert(
+              'Weekly Session Reset',
+              'Your session has been automatically logged out for the weekly reset.',
+              [{ text: 'OK', onPress: async () => await logout() }]
+            );
+          }
+        }
+      } catch (error) {
+        console.warn('[AuthContext] Sunday logout check failed:', error);
+      }
+    };
+
+    const interval = setInterval(() => {
+      ensureCurrentDeviceStillAllowed(user.uid).catch(() => {});
+      checkSundayLogout();
+    }, 15000);
+
+    // Check immediately on mount
+    checkSundayLogout();
+
+    return () => clearInterval(interval);
+  }, [user?.uid, ensureCurrentDeviceStillAllowed]);
 
   const login = async (email, password) => {
     try {
@@ -361,6 +460,9 @@ export const AuthProvider = ({ children }) => {
       const profile = mapProfile(userData, data.user);
       setUser(profile);
       await writeAuditLog(data.user.id, profile.name || email, profile.role, 'USER_LOGIN', `${profile.name || email} logged in to the mobile app`);
+      
+      // Save login date for Sunday logout check
+      await AsyncStorage.setItem('lastLoginDate', new Date().toISOString());
       
       // Create login notification for admins (only for regular users, not admins)
       if (profile.role === 'user') {
@@ -543,9 +645,10 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     if (user) {
       await writeAuditLog(user.uid, user.name || user.email, user.role, 'USER_LOGOUT', `${user.name || user.email} logged out of the mobile app`);
-      // Deactivate push token
-      await deactivateDeviceToken(user.uid);
+      // Deactivate only this device token so other active devices remain signed in.
+      await deactivateCurrentDeviceToken(user.uid);
     }
+    await AsyncStorage.removeItem('lastLoginDate');
     const { error } = await withTimeout(supabase.auth.signOut(), 'Signing out', 8000);
     if (error) throw error;
     setUser(null);

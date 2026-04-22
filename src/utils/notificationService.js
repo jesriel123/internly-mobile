@@ -1,9 +1,81 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 import { supabase } from '../../supabaseConfig';
 import Constants from 'expo-constants';
 
 const PUSH_TOKEN_TABLE = 'device_tokens';
+const DEVICE_TOKEN_STORAGE_KEY = 'internly_current_push_token';
+const DEVICE_LOCAL_ID_STORAGE_KEY = 'internly_local_device_id';
+const DEVICE_CACHE_KEY_PREFIX = 'internly_active_devices_cache_v1';
+const DEVICE_QUERY_TIMEOUT_MS = 10000;
+
+const parseJsonArray = (raw) => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const getDeviceCacheKey = (userId) => `${DEVICE_CACHE_KEY_PREFIX}:${userId}`;
+
+export const getCachedActiveDeviceTokens = async (userId) => {
+  if (!userId) return [];
+  const raw = await AsyncStorage.getItem(getDeviceCacheKey(userId));
+  return parseJsonArray(raw);
+};
+
+export const cacheActiveDeviceTokens = async (userId, devices) => {
+  if (!userId) return;
+  const safeDevices = Array.isArray(devices) ? devices : [];
+  await AsyncStorage.setItem(getDeviceCacheKey(userId), JSON.stringify(safeDevices));
+};
+
+const cacheCurrentDeviceEntry = async ({ userId, token, deviceType, platform }) => {
+  if (!userId || !token) return;
+
+  const now = new Date().toISOString();
+  const cached = await getCachedActiveDeviceTokens(userId);
+  const existing = cached.find((item) => item?.token === token);
+
+  const nextEntry = {
+    id: existing?.id || `local-cache-${token}`,
+    token,
+    device_type: deviceType || existing?.device_type || 'android',
+    platform: platform || existing?.platform || 'This device',
+    is_active: true,
+    created_at: existing?.created_at || now,
+    updated_at: now,
+  };
+
+  const withoutCurrent = cached.filter((item) => item?.token !== token);
+  await cacheActiveDeviceTokens(userId, [nextEntry, ...withoutCurrent]);
+};
+
+export const ensureCurrentDeviceInCache = async (userId) => {
+  if (!userId) return [];
+
+  const token = await getStoredDeviceToken();
+  if (!token) {
+    return getCachedActiveDeviceTokens(userId);
+  }
+
+  const deviceType = Device.osName?.toLowerCase() === 'ios' ? 'ios' : 'android';
+  const platformLabel = `${Device.brand || 'Unknown'} ${Device.modelName || ''} • ${Constants.systemVersion || ''}`.trim();
+
+  await cacheCurrentDeviceEntry({
+    userId,
+    token,
+    deviceType,
+    platform: platformLabel,
+  });
+
+  return getCachedActiveDeviceTokens(userId);
+};
 
 const isRemotePushEnabled = () => {
   const envValue = process.env.EXPO_PUBLIC_ENABLE_REMOTE_PUSH;
@@ -73,61 +145,65 @@ export const ensureNotificationPermission = async () => {
 export const registerForPushNotifications = async (userId) => {
   try {
     const hasPermission = await ensureNotificationPermission();
-    if (!hasPermission) {
-      return null;
-    }
+    let storedToken = null;
 
     const deviceType = Device.osName?.toLowerCase() === 'ios' ? 'ios' : 'android';
+    const platformLabel = `${Device.brand || 'Unknown'} ${Device.modelName || ''} • ${Constants.systemVersion || ''}`.trim();
 
-    if (!isRemotePushEnabled()) {
-      console.log('[Notifications] Remote push is disabled. Using local/realtime notifications only.');
-      return null;
+    const ensureLocalDeviceToken = async () => {
+      const existing = await AsyncStorage.getItem(DEVICE_LOCAL_ID_STORAGE_KEY);
+      if (existing) {
+        return `local-device:${existing}`;
+      }
+
+      const generatedId = typeof Crypto.randomUUID === 'function'
+        ? Crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+      await AsyncStorage.setItem(DEVICE_LOCAL_ID_STORAGE_KEY, generatedId);
+      return `local-device:${generatedId}`;
+    };
+
+    // Always register a fallback local token so device management works even
+    // when remote push is disabled or unsupported.
+    storedToken = await ensureLocalDeviceToken();
+
+    if (hasPermission && isRemotePushEnabled()) {
+      const isExpoGo =
+        Constants.appOwnership === 'expo' ||
+        Constants.executionEnvironment === 'storeClient';
+
+      if (!isExpoGo) {
+        const projectId = getProjectId();
+        const androidGoogleServicesConfigured = Boolean(
+          Constants.expoConfig?.android?.googleServicesFile
+        );
+
+        if (projectId && (deviceType !== 'android' || androidGoogleServicesConfigured)) {
+          const token = await Notifications.getExpoPushTokenAsync({ projectId });
+          if (token?.data) {
+            storedToken = token.data;
+            console.log('[Notifications] Got remote push token:', token.data);
+          }
+        }
+      }
     }
 
-    const isExpoGo =
-      Constants.appOwnership === 'expo' ||
-      Constants.executionEnvironment === 'storeClient';
-
-    if (isExpoGo) {
-      console.warn('[Notifications] Skipping remote push token registration in Expo Go. Use a development build for push notifications.');
-      return null;
-    }
-
-    const projectId = getProjectId();
-    if (!projectId) {
-      console.warn('[Notifications] No Expo project ID configured');
-      return null;
-    }
-
-    const androidGoogleServicesConfigured = Boolean(
-      Constants.expoConfig?.android?.googleServicesFile
-    );
-
-    if (deviceType === 'android' && !androidGoogleServicesConfigured) {
-      console.warn(
-        '[Notifications] Android push requires Firebase FCM client setup even when using Supabase. Add google-services.json, set expo.android.googleServicesFile in app config, rebuild your development client, then try again.'
-      );
-      return null;
-    }
-
-    const token = await Notifications.getExpoPushTokenAsync({
-      projectId,
+    await AsyncStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, storedToken);
+    await cacheCurrentDeviceEntry({
+      userId,
+      token: storedToken,
+      deviceType,
+      platform: platformLabel,
     });
-
-    if (!token?.data) {
-      console.warn('[Notifications] No Expo push token received');
-      return null;
-    }
-
-    console.log('[Notifications] Got token:', token.data);
 
     // Store token in Supabase
     const { error } = await supabase.from(PUSH_TOKEN_TABLE).upsert(
       {
         user_id: userId,
-        token: token.data,
+        token: storedToken,
         device_type: deviceType,
-        platform: Constants.systemVersion,
+        platform: platformLabel,
         is_active: true,
         updated_at: new Date().toISOString(),
       },
@@ -139,7 +215,14 @@ export const registerForPushNotifications = async (userId) => {
       return null;
     }
 
-    return token.data;
+    try {
+      const refreshedDevices = await getActiveDeviceTokens(userId);
+      await cacheActiveDeviceTokens(userId, refreshedDevices);
+    } catch (cacheError) {
+      console.warn('[Notifications] Failed to refresh device cache after register:', cacheError?.message || cacheError);
+    }
+
+    return storedToken;
   } catch (error) {
     const message = String(error?.message || error);
     if (message.includes('Default FirebaseApp is not initialized')) {
@@ -167,6 +250,134 @@ export const deactivateDeviceToken = async (userId) => {
   } catch (error) {
     console.error('[Notifications] Error deactivating token:', error);
   }
+};
+
+export const getStoredDeviceToken = async () => {
+  try {
+    return await AsyncStorage.getItem(DEVICE_TOKEN_STORAGE_KEY);
+  } catch (error) {
+    console.error('[Notifications] Error reading stored token:', error);
+    return null;
+  }
+};
+
+export const getActiveDeviceTokens = async (userId) => {
+  const queryPromise = supabase
+    .from(PUSH_TOKEN_TABLE)
+    .select('id, token, device_type, platform, is_active, created_at, updated_at')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false });
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Device query timed out. Check your internet and try again.')), DEVICE_QUERY_TIMEOUT_MS);
+  });
+
+  const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+
+  if (error) throw error;
+  return data || [];
+};
+
+export const deactivateDeviceTokenById = async (userId, tokenId) => {
+  const { error } = await supabase
+    .from(PUSH_TOKEN_TABLE)
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('id', tokenId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+
+  try {
+    const refreshedDevices = await getActiveDeviceTokens(userId);
+    await cacheActiveDeviceTokens(userId, refreshedDevices);
+  } catch (cacheError) {
+    console.warn('[Notifications] Failed to refresh device cache after single-device logout:', cacheError?.message || cacheError);
+  }
+};
+
+export const deactivateCurrentDeviceToken = async (userId) => {
+  try {
+    const currentToken = await getStoredDeviceToken();
+    if (!currentToken) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from(PUSH_TOKEN_TABLE)
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('token', currentToken);
+
+    if (error) {
+      console.error('[Notifications] Failed to deactivate current token:', error);
+      return;
+    }
+
+    try {
+      const refreshedDevices = await getActiveDeviceTokens(userId);
+      await cacheActiveDeviceTokens(userId, refreshedDevices);
+    } catch (cacheError) {
+      console.warn('[Notifications] Failed to refresh device cache after current logout:', cacheError?.message || cacheError);
+    }
+  } catch (error) {
+    console.error('[Notifications] Error deactivating current token:', error);
+  }
+};
+
+export const deactivateOtherDeviceTokens = async (userId) => {
+  const currentToken = await getStoredDeviceToken();
+  if (!currentToken) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from(PUSH_TOKEN_TABLE)
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .neq('token', currentToken);
+
+  if (error) throw error;
+
+  try {
+    const refreshedDevices = await getActiveDeviceTokens(userId);
+    await cacheActiveDeviceTokens(userId, refreshedDevices);
+  } catch (cacheError) {
+    console.warn('[Notifications] Failed to refresh device cache after logout others:', cacheError?.message || cacheError);
+  }
+};
+
+export const isCurrentDeviceTokenActive = async (userId) => {
+  const currentToken = await getStoredDeviceToken();
+  if (!currentToken) {
+    return true;
+  }
+
+  const queryPromise = supabase
+    .from(PUSH_TOKEN_TABLE)
+    .select('id, is_active')
+    .eq('user_id', userId)
+    .eq('token', currentToken)
+    .maybeSingle();
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Device status check timed out.')), DEVICE_QUERY_TIMEOUT_MS);
+  });
+
+  const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+
+  if (error && error.code !== 'PGRST116') {
+    throw error;
+  }
+
+  // If the token row does not exist yet (fresh login/reinstall),
+  // allow login and let registration create the row.
+  if (!data) {
+    return true;
+  }
+
+  return Boolean(data.is_active);
 };
 
 export const setupNotificationListeners = (onNotificationTap) => {

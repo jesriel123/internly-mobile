@@ -4,6 +4,12 @@
     "slug": "internly-ojt-tracker",
     "scheme": "internly",
     "version": "1.0.3",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d329cb68-6a5f-4e21-8055-6ae62b0ea942"
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",

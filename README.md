@@ -14,7 +14,7 @@ Mobile app para sa pag-track ng OJT hours, tasks, at progress.
 - React Native + Expo
 - React Navigation (Bottom Tabs + Stack)
 - React Native Paper (UI Components)
-- Firebase Firestore (Database)
+- Supabase (Database + Auth + Realtime)
 - AsyncStorage (Local storage)
 
 ## Setup
@@ -24,7 +24,7 @@ Mobile app para sa pag-track ng OJT hours, tasks, at progress.
 npm install
 ```
 
-2. Update Firebase config sa `firebaseConfig.js`
+2. Update Supabase config sa your configuration file
 
 3. Run the app:
 ```bash

@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, StatusBar, Alert, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, StyleSheet, ScrollView, TouchableOpacity, StatusBar, RefreshControl, Platform, Modal } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SPACING, BORDER_RADIUS } from '../constants/theme';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useFocusEffect } from '@react-navigation/native';
-import { supabase } from '../../supabaseConfig';
 import { getCachedTimeLogs, invalidateTimeLogsCache } from '../utils/timeLogsCache';
-import { createClockNotification } from '../utils/notificationHelper';
+import {
+  enqueueTimeLogOperation,
+  flushTimeLogQueue,
+  getPendingTimeLogOperations,
+  applyPendingOperationsToLogs,
+} from '../utils/offlineTimeLogQueue';
 
 const PH_TIMEZONE = 'Asia/Manila';
 
@@ -54,6 +58,14 @@ export default function TimeLogScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [feedbackModal, setFeedbackModal] = useState({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'info',
+  });
+  const syncingRef = useRef(false);
 
   const dailyMax = user?.setup?.dailyMaxHours || 8;
   const weekend = isWeekend(currentTime);
@@ -64,14 +76,35 @@ export default function TimeLogScreen() {
     return () => clearInterval(timer);
   }, []);
 
+  const syncQueuedLogs = useCallback(async () => {
+    if (!user?.uid || syncingRef.current) {
+      return { syncedCount: 0, pendingCount: 0, lastError: null };
+    }
+
+    syncingRef.current = true;
+    try {
+      const result = await flushTimeLogQueue({ uid: user.uid });
+      setPendingSyncCount(result.pendingCount);
+      if (result.syncedCount > 0) {
+        invalidateTimeLogsCache(user.uid);
+      }
+      return result;
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [user?.uid]);
+
   const fetchLogs = useCallback(async () => {
     if (!user?.uid) return;
     try {
-      const list = (await getCachedTimeLogs(user.uid))
-        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      setLogs(list);
+      const list = await getCachedTimeLogs(user.uid);
+      const pendingOps = await getPendingTimeLogOperations(user.uid);
+      const merged = applyPendingOperationsToLogs(list, pendingOps);
+
+      setPendingSyncCount(pendingOps.length);
+      setLogs(merged);
       const key = todayKey();
-      setTodayLog(list.find(l => l.date === key) || null);
+      setTodayLog(merged.find(l => l.date === key) || null);
     } catch (e) {
       console.error('Failed to fetch time logs:', e);
     }
@@ -85,39 +118,62 @@ export default function TimeLogScreen() {
   // Re-fetch on tab focus so approved/rejected status is always current
   useFocusEffect(
     useCallback(() => {
-      fetchLogs();
-    }, [fetchLogs])
+      let mounted = true;
+
+      const refreshWithSync = async () => {
+        await syncQueuedLogs();
+        if (mounted) {
+          await fetchLogs();
+        }
+      };
+
+      refreshWithSync();
+      return () => {
+        mounted = false;
+      };
+    }, [fetchLogs, syncQueuedLogs])
   );
+
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    const interval = setInterval(async () => {
+      const result = await syncQueuedLogs();
+      if (result.syncedCount > 0) {
+        await fetchLogs();
+      }
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [user?.uid, syncQueuedLogs, fetchLogs]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncQueuedLogs();
     await fetchLogs();
     setRefreshing(false);
-  }, [fetchLogs]);
+  }, [fetchLogs, syncQueuedLogs]);
+
+  const showFeedback = (title, message, type = 'info') => {
+    setFeedbackModal({
+      visible: true,
+      title,
+      message,
+      type,
+    });
+  };
+
+  const closeFeedbackModal = () => {
+    setFeedbackModal(prev => ({ ...prev, visible: false }));
+  };
 
   const handleTimeIn = async () => {
-    if (weekend) { Alert.alert('No OJT today', 'No OJT today (Weekend)'); return; }
-    if (isApproved) { Alert.alert('Already Approved', "Today's log has already been approved. No changes needed."); return; }
-    if (todayLog?.timeIn) { Alert.alert('Already Clocked In', 'You have already clocked in for today.'); return; }
+    if (weekend) { showFeedback('No OJT today', 'No OJT today (Weekend)', 'warning'); return; }
+    if (isApproved) { showFeedback('Already Approved', "Today's log has already been approved. No changes needed.", 'warning'); return; }
+    if (todayLog?.timeIn) { showFeedback('Already Clocked In', 'You have already clocked in for today.', 'warning'); return; }
     setBusy(true);
     try {
       const key = todayKey();
       const now = new Date();
-      const { data, error } = await supabase.from('time_logs').upsert([{
-        user_id: user.uid,
-        date: key,
-        time_in: now.toISOString(),
-        time_out: null,
-        hours: null,
-        status: 'pending',
-        created_at: now.toISOString(),
-        updated_at: now.toISOString(),
-      }], { onConflict: 'user_id,date' }).select();
-      if (error) throw error;
-      
-      const logId = data?.[0]?.id;
-      
-      // Write audit log
       const nowTimePH = now.toLocaleTimeString('en-US', {
         timeZone: PH_TIMEZONE,
         hour: '2-digit',
@@ -125,47 +181,34 @@ export default function TimeLogScreen() {
         hour12: true,
       });
 
-      await supabase.from('audit_logs').insert([{
-        user_id: user.uid,
-        user_name: user.name || user.email,
-        user_role: 'user',
-        action: 'CLOCK_IN',
-        details: `${user.name || user.email} clocked IN on ${key} at ${nowTimePH} (PH)`,
-      }]);
-      
-      // Create notification for admins
-      console.log('[TimeLogScreen] About to create clock_in notification...');
-      Alert.alert('Debug', 'Creating notification...');
-      try {
-        await createClockNotification({
-          type: 'clock_in',
-          userId: user.uid,
-          userName: user.name || user.email,
-          userCompany: user.company || '',
-          logDate: key,
-          logId,
-          time: now.toLocaleTimeString('en-US', { timeZone: PH_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: true }),
-        });
-        console.log('[TimeLogScreen] Clock_in notification call completed');
-        Alert.alert('Debug', 'Notification created!');
-      } catch (notifError) {
-        console.error('[TimeLogScreen] Notification error:', notifError);
-        Alert.alert('Debug Error', notifError.message);
-      }
-      
-      invalidateTimeLogsCache(user.uid);
+      await enqueueTimeLogOperation({
+        type: 'clock_in',
+        uid: user.uid,
+        date: key,
+        timeInISO: now.toISOString(),
+        userName: user.name || user.email,
+        userEmail: user.email || '',
+        userCompany: user.company || '',
+      });
+
+      const syncResult = await syncQueuedLogs();
       await fetchLogs();
-      Alert.alert('Clocked In', `Time In recorded at ${nowTimePH} (PH)`);
+
+      if (syncResult.pendingCount > 0) {
+        showFeedback('Saved Offline', `Time In saved at ${nowTimePH} (PH). It will auto-sync when internet is back.`, 'info');
+      } else {
+        showFeedback('Clocked In', `Time In recorded at ${nowTimePH} (PH)`, 'success');
+      }
     } catch (e) {
-      Alert.alert('Error', e.message);
+      showFeedback('Error', e?.message || 'Something went wrong while clocking in.', 'error');
     } finally { setBusy(false); }
   };
 
   const handleTimeOut = async () => {
-    if (weekend) { Alert.alert('No OJT today', 'No OJT today (Weekend)'); return; }
-    if (isApproved) { Alert.alert('Already Approved', "Today's log has already been approved. No changes needed."); return; }
-    if (!todayLog?.timeIn) { Alert.alert('No Time In', 'Please clock in first before clocking out.'); return; }
-    if (todayLog?.timeOut) { Alert.alert('Already Clocked Out', 'You have already clocked out for today.'); return; }
+    if (weekend) { showFeedback('No OJT today', 'No OJT today (Weekend)', 'warning'); return; }
+    if (isApproved) { showFeedback('Already Approved', "Today's log has already been approved. No changes needed.", 'warning'); return; }
+    if (!todayLog?.timeIn) { showFeedback('No Time In', 'Please clock in first before clocking out.', 'warning'); return; }
+    if (todayLog?.timeOut) { showFeedback('Already Clocked Out', 'You have already clocked out for today.', 'warning'); return; }
     setBusy(true);
     try {
       const key = todayKey();
@@ -179,13 +222,6 @@ export default function TimeLogScreen() {
       if (rawHours > dailyMax) { capped = true; rawHours = dailyMax; }
       const hours = Math.round(rawHours * 100) / 100;
 
-      const { error } = await supabase.from('time_logs')
-        .update({ time_out: now.toISOString(), hours, status: 'pending', updated_at: now.toISOString() })
-        .eq('user_id', user.uid)
-        .eq('date', key);
-      if (error) throw error;
-      
-      // Write audit log
       const nowTimePH = now.toLocaleTimeString('en-US', {
         timeZone: PH_TIMEZONE,
         hour: '2-digit',
@@ -193,44 +229,31 @@ export default function TimeLogScreen() {
         hour12: true,
       });
 
-      await supabase.from('audit_logs').insert([{
-        user_id: user.uid,
-        user_name: user.name || user.email,
-        user_role: 'user',
-        action: 'CLOCK_OUT',
-        details: `${user.name || user.email} clocked OUT on ${key} at ${nowTimePH} (PH) - ${hours.toFixed(2)}h logged`,
-      }]);
-      
-      // Create notification for admins
-      console.log('[TimeLogScreen] About to create clock_out notification...');
-      Alert.alert('Debug', 'Creating clock out notification...');
-      try {
-        await createClockNotification({
-          type: 'clock_out',
-          userId: user.uid,
-          userName: user.name || user.email,
-          userCompany: user.company || '',
-          logDate: key,
-          logId: todayLog.id,
-          time: now.toLocaleTimeString('en-US', { timeZone: PH_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: true }),
-          hours: hours.toFixed(2),
-        });
-        console.log('[TimeLogScreen] Clock_out notification call completed');
-        Alert.alert('Debug', 'Clock out notification created!');
-      } catch (notifError) {
-        console.error('[TimeLogScreen] Notification error:', notifError);
-        Alert.alert('Debug Error', notifError.message);
-      }
-      
-      invalidateTimeLogsCache(user.uid);
+      await enqueueTimeLogOperation({
+        type: 'clock_out',
+        uid: user.uid,
+        date: key,
+        timeInISO: todayLog.timeIn,
+        timeOutISO: now.toISOString(),
+        hours,
+        userName: user.name || user.email,
+        userEmail: user.email || '',
+        userCompany: user.company || '',
+        logId: todayLog.id || null,
+      });
+
+      const syncResult = await syncQueuedLogs();
       await fetchLogs();
-      if (capped) {
-        Alert.alert('Overtime Notice', `Overtime hours will not be counted. Logged ${hours} hrs (capped at ${dailyMax}).`);
+
+      if (syncResult.pendingCount > 0) {
+        showFeedback('Saved Offline', `Time Out saved at ${nowTimePH} (PH). It will auto-sync when internet is back.`, 'info');
+      } else if (capped) {
+        showFeedback('Overtime Notice', `Overtime hours will not be counted. Logged ${hours} hrs (capped at ${dailyMax}).`, 'warning');
       } else {
-        Alert.alert('Clocked Out', `Logged ${hours.toFixed(2)} hours today.`);
+        showFeedback('Clocked Out', `Logged ${hours.toFixed(2)} hours today.`, 'success');
       }
     } catch (e) {
-      Alert.alert('Error', e.message);
+      showFeedback('Error', e?.message || 'Something went wrong while clocking out.', 'error');
     } finally { setBusy(false); }
   };
 
@@ -280,10 +303,14 @@ export default function TimeLogScreen() {
         </View>
 
         {/* Big Digital Clock Card */}
-        <View style={[styles.clockCard, { backgroundColor: theme.surface }]}>
-          <Text style={[styles.clockTime, { color: theme.text }]}>{hoursMinutesSeconds}</Text>
-          <Text style={[styles.clockAmPm, { color: theme.text }]}>{amPm}</Text>
-          <Text style={[styles.clockDate, { color: theme.textSecondary }]}>{clockDateStr}</Text>
+        <View style={[styles.clockCard, { backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }]}>
+          <View style={styles.clockTimeWrapper}>
+            <Text style={[styles.clockTime, { color: theme.text }]} numberOfLines={1} adjustsFontSizeToFit>
+              {hoursMinutesSeconds}
+            </Text>
+            <Text style={[styles.clockAmPm, { color: theme.text }]}>{amPm}</Text>
+          </View>
+          <Text style={[styles.clockDateStr, { color: theme.textSecondary }]}>{clockDateStr}</Text>
         </View>
 
         {/* Buttons Row */}
@@ -291,21 +318,21 @@ export default function TimeLogScreen() {
           <TouchableOpacity
             style={[
               styles.timeBtn,
-              styles.timeInBtn,
+              { backgroundColor: (weekend || clockedIn || todayDone || busy) ? '#4338CA' : '#6366F1' },
               (weekend || clockedIn || todayDone || busy) && styles.btnDisabled
             ]}
             onPress={handleTimeIn}
             disabled={weekend || clockedIn || todayDone || busy}
             activeOpacity={0.7}
           >
-            <View style={[styles.dot, { backgroundColor: '#4CAF50' }]} />
+            <View style={[styles.dot, { backgroundColor: '#4ADE80' }]} />
             <Text style={styles.timeInText}>{clockedIn ? 'Clocked In' : 'Time In'}</Text>
           </TouchableOpacity>
           
           <TouchableOpacity
             style={[
               styles.timeBtn,
-              { backgroundColor: theme.timeOutBtn },
+              { backgroundColor: isDark ? '#1C1C1E' : '#F1F5F9' },
               styles.timeOutElevation,
               (weekend || !clockedIn || clockedOut || todayDone || busy) && styles.btnDisabled
             ]}
@@ -313,12 +340,15 @@ export default function TimeLogScreen() {
             disabled={weekend || !clockedIn || clockedOut || todayDone || busy}
             activeOpacity={0.7}
           >
-            <View style={[styles.dot, { backgroundColor: '#F44336' }]} />
+            <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
             <Text style={[styles.timeOutText, { color: theme.textSecondary }]}>{clockedOut ? 'Clocked Out' : 'Time Out'}</Text>
           </TouchableOpacity>
         </View>
 
         <Text style={[styles.noticeText, { color: theme.textSecondary }]}>Max {dailyMax} hours/day • Monday–Friday only</Text>
+        {pendingSyncCount > 0 && (
+          <Text style={[styles.noticeText, { color: '#F59E0B', marginTop: -8 }]}>Pending sync: {pendingSyncCount} change{pendingSyncCount > 1 ? 's' : ''}</Text>
+        )}
 
         {/* Keep Today's log for transparency if they clocked in */}
         {todayLog && (
@@ -361,6 +391,59 @@ export default function TimeLogScreen() {
             </View>
           </View>
         )}
+
+        <Modal
+          visible={feedbackModal.visible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeFeedbackModal}
+        >
+          <TouchableOpacity style={styles.feedbackOverlay} activeOpacity={1} onPress={closeFeedbackModal}>
+            <TouchableOpacity style={styles.feedbackCard} activeOpacity={1} onPress={() => {}}>
+              <View style={styles.feedbackHeaderRow}>
+                <View
+                  style={[
+                    styles.feedbackIcon,
+                    feedbackModal.type === 'success'
+                      ? styles.feedbackIconSuccess
+                      : feedbackModal.type === 'error'
+                        ? styles.feedbackIconError
+                        : styles.feedbackIconInfo,
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name={
+                      feedbackModal.type === 'success'
+                        ? 'check-bold'
+                        : feedbackModal.type === 'error'
+                          ? 'alert-circle-outline'
+                          : 'information-outline'
+                    }
+                    size={16}
+                    color="#FFFFFF"
+                  />
+                </View>
+                <Text style={styles.feedbackTitle}>{feedbackModal.title}</Text>
+              </View>
+
+              <Text style={styles.feedbackMessage}>{feedbackModal.message}</Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.feedbackButton,
+                  feedbackModal.type === 'success'
+                    ? styles.feedbackButtonSuccess
+                    : feedbackModal.type === 'error'
+                      ? styles.feedbackButtonError
+                      : styles.feedbackButtonInfo,
+                ]}
+                onPress={closeFeedbackModal}
+              >
+                <Text style={styles.feedbackButtonText}>OK</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
         
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -377,30 +460,59 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 14, color: COLORS.textSecondary },
 
   clockCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.xl,
-    paddingVertical: 50,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingVertical: 56,
+    paddingHorizontal: 20,
     alignItems: 'center',
-    marginBottom: SPACING.xl,
+    justifyContent: 'center',
+    marginBottom: 32,
     elevation: 3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10,
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 4 }, 
+    shadowOpacity: 0.1, 
+    shadowRadius: 10,
   },
-  clockTime: { fontSize: 52, fontWeight: 'bold', letterSpacing: 2, color: COLORS.text, fontFamily: 'monospace' },
-  clockAmPm: { fontSize: 32, fontWeight: 'bold', color: COLORS.text, marginTop: -5, opacity: 0.8 },
-  clockDate: { fontSize: 13, fontWeight: '600', color: COLORS.textSecondary, marginTop: 16 },
+  clockTimeWrapper: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+  },
+  clockTime: { 
+    fontSize: 56, 
+    fontWeight: '800', 
+    letterSpacing: 2, 
+    color: '#000', 
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    includeFontPadding: false 
+  },
+  clockAmPm: { 
+    fontSize: 24, 
+    fontWeight: '800', 
+    color: '#000', 
+    marginLeft: 8,
+    includeFontPadding: false
+  },
+  clockDateStr: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#666', 
+    marginTop: 20,
+    letterSpacing: 0.5 
+  },
 
-  btnRow: { flexDirection: 'row', gap: 16, marginBottom: SPACING.md },
+  btnRow: { flexDirection: 'row', gap: 16, marginBottom: 32 },
   timeBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 18, borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: 20, borderRadius: 20,
   },
-  timeInBtn: { backgroundColor: COLORS.primary, elevation: 2, shadowColor: COLORS.primary, shadowOffset: {width:0, height:2}, shadowOpacity:0.3, shadowRadius:4 },
-  timeOutElevation: { elevation: 1 },
+  timeInBtn: { elevation: 0 },
+  timeOutElevation: { elevation: 0 },
   
-  btnDisabled: { opacity: 0.5 },
-  dot: { width: 12, height: 12, borderRadius: 6, marginRight: 10, elevation: 2 },
-  timeInText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  timeOutText: { color: COLORS.textSecondary, fontWeight: 'bold', fontSize: 16 },
+  btnDisabled: { opacity: 0.6 },
+  dot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
+  timeInText: { color: 'white', fontWeight: '800', fontSize: 17 },
+  timeOutText: { color: '#64748B', fontWeight: '800', fontSize: 17 },
 
   noticeText: { textAlign: 'center', color: COLORS.textSecondary, fontSize: 13, marginBottom: SPACING.xl, fontWeight: '500' },
 
@@ -410,4 +522,78 @@ const styles = StyleSheet.create({
   todayItem: { alignItems: 'center' },
   todayVal: { fontSize: 15, fontWeight: 'bold', color: COLORS.text, marginTop: 4 },
   todaySub: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
+  feedbackOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(16, 12, 38, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+  },
+  feedbackCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    shadowColor: '#20144A',
+    shadowOpacity: 0.2,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 14,
+  },
+  feedbackHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  feedbackIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  feedbackIconSuccess: {
+    backgroundColor: '#2FA56A',
+  },
+  feedbackIconError: {
+    backgroundColor: '#E45757',
+  },
+  feedbackIconInfo: {
+    backgroundColor: COLORS.primary,
+  },
+  feedbackTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1F1A43',
+  },
+  feedbackMessage: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#524D77',
+    marginBottom: 16,
+  },
+  feedbackButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+  },
+  feedbackButtonSuccess: {
+    backgroundColor: '#2FA56A',
+  },
+  feedbackButtonError: {
+    backgroundColor: '#E45757',
+  },
+  feedbackButtonInfo: {
+    backgroundColor: COLORS.primary,
+  },
+  feedbackButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
 });
